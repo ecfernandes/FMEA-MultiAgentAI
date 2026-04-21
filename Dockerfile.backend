@@ -1,0 +1,36 @@
+# ============================================================================
+# Dockerfile.backend
+# AI-Driven FMEA 5.0 — FastAPI Backend
+# ============================================================================
+FROM python:3.11-slim
+
+LABEL maintainer="Ederson Carvalhar Fernandes"
+LABEL description="FMEA 5.0 FastAPI backend"
+
+# System dependencies (PyMuPDF needs poppler-like libs)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libmupdf-dev \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Install Python dependencies first (layer cache)
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir fastapi uvicorn[standard] python-multipart
+
+# Copy source code
+COPY . .
+
+# Non-root user for security
+RUN adduser --disabled-password --gecos "" fmea && chown -R fmea /app
+USER fmea
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

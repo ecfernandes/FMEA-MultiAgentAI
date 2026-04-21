@@ -1,0 +1,61 @@
+# ============================================================================
+# .dockerignore — build context for the API service (context = project root)
+# ============================================================================
+
+# Virtual environment (NEVER copy into the image)
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Test artefacts and debug files
+.pytest_cache/
+.mypy_cache/
+*.log
+debug_extraction_out.txt
+tests/
+test_*.py
+
+# Large data / books (loaded at runtime via volume or S3, not baked in)
+data/
+Books/
+notebooks/
+
+# Secrets — NEVER bake credentials into the image
+.env
+.env.*
+!.env.example
+
+# Git history
+.git/
+.gitignore
+.gitattributes
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Frontend (has its own build context)
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+
+# Root-level Dockerfile duplicate (not used by compose)
+Dockerfile.backend
+
+# Docs (not needed in the runtime image)
+*.md

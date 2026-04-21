@@ -1,0 +1,379 @@
+/* ── Shell & Layout ────────────────────────────────────────────────────── */
+.shell {
+  min-height: 100vh;
+  background: var(--bg-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 2rem;
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.headerInner {
+  max-width: 1400px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.title {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+}
+
+.version {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.subtitle {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-top: 0.1rem;
+}
+
+.main {
+  flex: 1;
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  padding: 2rem;
+}
+
+/* ── API Key input ─────────────────────────────────────────────────────── */
+.keyInput {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  width: 280px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.keyInput:focus { border-color: var(--accent); }
+.keyInput::placeholder { color: var(--text-secondary); }
+
+/* ── Card ──────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 2rem;
+  max-width: 640px;
+  margin: 2rem auto;
+  box-shadow: var(--shadow);
+}
+
+.stepTitle {
+  font-size: 1.2rem;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+}
+
+.hint {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin-bottom: 1.5rem;
+}
+
+/* ── Drop zone ─────────────────────────────────────────────────────────── */
+.dropZone {
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 1.25rem;
+  color: var(--text-secondary);
+}
+.dropZone:hover, .dropActive {
+  border-color: var(--accent);
+  background: rgba(74, 158, 255, 0.05);
+  color: var(--text-primary);
+}
+.dropHasFile {
+  border-color: var(--success);
+  border-style: solid;
+  background: rgba(16, 185, 129, 0.05);
+  color: var(--text-primary);
+}
+.dropIcon { font-size: 2.5rem; margin-bottom: 0.25rem; }
+.fileSize { font-size: 0.75rem; color: var(--text-secondary); }
+
+/* ── Buttons ───────────────────────────────────────────────────────────── */
+.btnPrimary {
+  width: 100%;
+  padding: 0.75rem 1.5rem;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: opacity 0.2s, transform 0.15s;
+}
+.btnPrimary:hover:not(:disabled) { opacity: 0.9; transform: translateY(-1px); }
+.btnPrimary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btnSecondary {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btnSecondary:hover { border-color: var(--accent); color: var(--accent); }
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.btnTelemetry {
+  padding: 0.5rem 1rem;
+  background: #ffffff;
+  color: #000000;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: not-allowed;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+.headerControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.btnDashboard {
+  padding: 0.5rem 1rem;
+  background: #1a8fff;
+  color: #fff;
+  border: 1px solid #1a8fff;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: not-allowed;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+.btnReport {
+  padding: 0.5rem 1rem;
+  background: #16a34a;
+  color: #fff;
+  border: 1px solid #16a34a;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  cursor: not-allowed;
+  white-space: nowrap;
+  opacity: 0.75;
+}
+
+/* ── Spinner ───────────────────────────────────────────────────────────── */
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+  display: inline-block;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Error ─────────────────────────────────────────────────────────────── */
+.errorBox {
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  font-size: 0.85rem;
+  color: #fca5a5;
+  margin-bottom: 1rem;
+}
+
+/* ── Document banner ───────────────────────────────────────────────────── */
+.docBanner {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.85rem 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+}
+.docMeta { display: flex; align-items: center; gap: 0; flex-wrap: wrap; }
+.metaItem { display: flex; flex-direction: column; padding: 0 1rem; font-size: 0.85rem; }
+.metaLabel { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); font-weight: 600; margin-bottom: 0.1rem; }
+.metaDivider { width: 1px; height: 36px; background: var(--border); margin: 0 0.25rem; }
+
+/* ── Function pills ────────────────────────────────────────────────────── */
+.pills {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 1.25rem;
+  padding: 1rem;
+  background: var(--bg-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.9rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  transition: all 0.2s;
+  text-align: left;
+}
+.pill:hover { border-color: var(--accent); color: var(--text-primary); }
+.pillActive { background: rgba(74, 158, 255, 0.12); border-color: var(--accent); color: var(--text-primary); }
+.pillIdx { font-size: 0.7rem; font-weight: 700; color: var(--accent); }
+.pillLabel { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pillCount { background: var(--bg-primary); border-radius: 10px; padding: 0.1rem 0.45rem; font-size: 0.7rem; font-weight: 600; color: var(--text-secondary); }
+
+/* ── Function header ───────────────────────────────────────────────────── */
+.fnHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.fnTitle {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.fnBadge {
+  background: rgba(74, 158, 255, 0.2);
+  color: var(--accent);
+  border: 1px solid rgba(74, 158, 255, 0.4);
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.fnCount { font-size: 0.82rem; color: var(--text-secondary); }
+
+/* ── FMEA Table ────────────────────────────────────────────────────────── */
+.tableWrap {
+  overflow-x: auto;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  background: var(--bg-card);
+}
+.table th {
+  background: var(--bg-secondary);
+  padding: 0.65rem 0.9rem;
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.table td {
+  padding: 0.65rem 0.9rem;
+  border-bottom: 1px solid rgba(55, 65, 81, 0.5);
+  vertical-align: top;
+  color: var(--text-primary);
+}
+.table tr:last-child td { border-bottom: none; }
+.table tr:hover td { background: rgba(255,255,255,0.02); }
+.bold { font-weight: 600; }
+.muted { color: var(--text-secondary); font-size: 0.82rem; }
+.center { text-align: center !important; }
+
+/* ── Badges (S/O/D and RPN) ────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  padding: 0.2rem 0.5rem;
+  border-radius: 6px;
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+/* SOD */
+.sodHigh  { background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+.sodMed   { background: rgba(245,158,11,0.15); color: #fcd34d; border: 1px solid rgba(245,158,11,0.3); }
+.sodLow   { background: rgba(16,185,129,0.15); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.3); }
+.sodEmpty { background: rgba(156,163,175,0.1); color: var(--text-secondary); border: 1px dashed var(--border); }
+/* RPN */
+.rpnHigh  { background: rgba(239,68,68,0.2);  color: #f87171; border: 1px solid rgba(239,68,68,0.4); }
+.rpnMed   { background: rgba(245,158,11,0.2);  color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
+.rpnLow   { background: rgba(16,185,129,0.2);  color: #34d399; border: 1px solid rgba(16,185,129,0.4); }
+.rpnEmpty { background: rgba(156,163,175,0.1); color: var(--text-secondary); border: 1px dashed var(--border); }
+
+/* ── Critical threshold highlight ─────────────────────────────────────── */
+.criticalBanner {
+  padding: 0.25rem 0.75rem;
+  background: rgba(239, 68, 68, 0.08);
+  border-left: 4px solid #ef4444;
+  color: #ef4444;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.criticalBadge {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  font-weight: 700;
+}
+
+/* ── Empty state ───────────────────────────────────────────────────────── */
+.empty {
+  padding: 2rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}

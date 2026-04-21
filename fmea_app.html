@@ -1,0 +1,1040 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FMEA AI-Expert Framework 5.0</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            industrial: { 50:'#eff6ff',100:'#dbeafe',500:'#3b82f6',600:'#2563eb',700:'#1d4ed8',800:'#1e40af',900:'#1e3a8a' }
+          }
+        }
+      }
+    }
+  </script>
+
+  <!-- React 18 + ReactDOM -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <!-- Babel standalone for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .animate-spin-slow { animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+    .progress-indeterminate { background: linear-gradient(90deg,#3b82f6 25%,#93c5fd 50%,#3b82f6 75%); background-size:200% 100%; animation:shimmer 1.4s linear infinite; }
+  </style>
+</head>
+
+<body class="bg-slate-50 text-slate-900 transition-colors">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const API = 'http://localhost:8000';
+
+const MODELS = [
+  { value: 'qwen3527b-no-think',                                  label: 'Qwen3.5 27b (no-think) ★', recommended: true },
+  { value: 'mistral-small3.2:latest',                             label: 'Mistral Small 3.2 · 24B' },
+  { value: 'hf.co/unsloth/Magistral-Small-2509-GGUF:UD-Q4_K_XL', label: 'Magistral Small 2509 · 23.6B' },
+  { value: 'ministral-3:3b',                                      label: 'Ministral 3 · 3.8B ⚠ not for extraction', weak: true },
+  { value: 'glm-4.7-flash:latest',                                label: 'GLM 4.7 Flash · 29.9B' },
+  { value: 'hf.co/unsloth/Olmo-3.1-32B-Instruct-GGUF:Q4_K_M',   label: 'Olmo 3.1 · 32B' },
+  { value: 'hf.co/unsloth/Olmo-3.1-32B-Think-GGUF:Q4_K_M',      label: 'Olmo 3.1 Think · 32B' },
+  { value: 'devstral-small-2:latest',                             label: 'Devstral Small 2 · 24B' },
+  { value: 'gemma4:31b',                                          label: 'Gemma 4 · 31B' },
+];
+
+// ─── Utilities ──────────────────────────────────────────────────────────────
+function rpnCls(v) {
+  if (!v) return 'bg-slate-100 text-slate-400';
+  if (v > 100) return 'bg-red-100 text-red-700 font-bold';
+  if (v > 40)  return 'bg-amber-100 text-amber-700 font-semibold';
+  return 'bg-emerald-100 text-emerald-700';
+}
+function sodCls(v) {
+  if (!v) return 'bg-slate-100 text-slate-400';
+  if (v >= 8) return 'bg-red-100 text-red-700 font-bold';
+  if (v >= 5) return 'bg-amber-100 text-amber-700 font-semibold';
+  return 'bg-emerald-100 text-emerald-700';
+}
+function groupByFn(records) {
+  const m = new Map();
+  for (const r of records) {
+    const k = r.function || r.component || 'Unknown';
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(r);
+  }
+  return m;
+}
+
+// ─── Header ─────────────────────────────────────────────────────────────────
+function Header({ model, setModel, dark, toggleDark }) {
+  const weakModel = MODELS.find(m => m.value === model)?.weak;
+  return (
+    <header className="flex items-center justify-between mb-8">
+      <h1 className="text-2xl font-bold tracking-tight">
+        AI-Driven FMEA <span className="text-blue-600">5.0</span>
+      </h1>
+      <div className="flex items-center gap-3">
+        <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-white text-black border border-slate-300 cursor-not-allowed opacity-75">
+          System Telemetry
+        </button>
+        <div className="flex flex-col items-end gap-0.5">
+          <select
+            value={model} onChange={e => setModel(e.target.value)}
+            className={`border ${weakModel ? 'border-amber-400 ring-1 ring-amber-400' : 'border-slate-200 dark:border-slate-600'} bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer`}
+          >
+            {MODELS.map(m => (
+              <option key={m.value} value={m.value}>{m.label}</option>
+            ))}
+          </select>
+          {weakModel && (
+            <span className="text-xs text-amber-600 font-medium">
+              ⚠ This model (3.8B) is too small for extraction and suggestions — use Qwen3.5 27b
+            </span>
+          )}
+        </div>
+        <button
+          onClick={toggleDark}
+          className="border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-full px-4 py-2 text-sm hover:border-blue-500 transition-colors"
+        >
+          {dark ? '☀ Light' : '🌙 Dark'}
+        </button>
+      </div>
+    </header>
+  );
+}
+
+// ─── Accordion ──────────────────────────────────────────────────────────────
+function Accordion({ title, open, onToggle, badge, children }) {
+  return (
+    <div className="border border-slate-200 dark:border-slate-700 rounded-2xl bg-white dark:bg-slate-800 shadow-sm mb-4 overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-5 py-4 bg-slate-50 dark:bg-slate-800/80 hover:bg-white dark:hover:bg-slate-700/60 border-b border-slate-200 dark:border-slate-700 text-left transition-colors"
+      >
+        <span className="font-semibold text-slate-700 dark:text-slate-200 text-[1.05rem] flex items-center gap-2">
+          {title}
+          {badge && <span className="text-xs bg-blue-600 text-white px-2 py-0.5 rounded-full font-medium">{badge}</span>}
+        </span>
+        <span className={`text-slate-400 transition-transform duration-300 ${open ? 'rotate-180' : ''}`}>▼</span>
+      </button>
+      {open && <div className="p-5">{children}</div>}
+    </div>
+  );
+}
+
+// ─── Step 1A — Upload ────────────────────────────────────────────────────────
+function UploadSection({ open, onToggle, model, onExtracted }) {
+  const [file, setFile]         = useState(null);
+  const [loading, setLoad]      = useState(false);
+  const [error, setError]       = useState('');
+  const [dragging, setDrag]     = useState(false);
+  const [progress, setProgress] = useState(null); // {page, total, records}
+  const [statusMsg, setStatusMsg] = useState('');
+  const [pageRange, setPageRange] = useState('');
+  const [elapsed, setElapsed]   = useState(0);   // seconds since extraction started
+  const inputRef = useRef();
+
+  // Elapsed-time ticker — shows activity while waiting for LLM
+  useEffect(() => {
+    if (!loading) { setElapsed(0); return; }
+    const id = setInterval(() => setElapsed(s => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [loading]);
+
+  const setF = f => { setFile(f); setError(''); };
+
+  // Timeout in ms: 5 min for PDF (multiple LLM calls), 3 min for Excel
+  const PDF_TIMEOUT_MS  = 5 * 60 * 1000;
+  const XLSX_TIMEOUT_MS = 3 * 60 * 1000;
+
+  async function doExtract() {
+    if (!file) return;
+    setLoad(true); setError(''); setProgress(null); setStatusMsg('Extracting…');
+    const ctrl    = new AbortController();
+    const isPDF   = file.name.toLowerCase().endsWith('.pdf');
+    const timerId = setTimeout(() => ctrl.abort(), isPDF ? PDF_TIMEOUT_MS : XLSX_TIMEOUT_MS);
+    try {
+      const form = new FormData(); form.append('file', file);
+
+      if (isPDF) {
+        // ── Streaming extraction (page by page) ────────────────────────────
+        const headers = { 'X-Model-Name': model };
+        if (pageRange.trim()) headers['X-Page-Range'] = pageRange.trim();
+        const res = await fetch(`${API}/extract/stream`, {
+          method: 'POST', headers, body: form, signal: ctrl.signal
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`); }
+
+        const reader  = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop(); // keep incomplete trailing line
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            let evt;
+            try { evt = JSON.parse(line.slice(6)); } catch { continue; }
+            if (evt.type === 'start') {
+              setProgress({ page: 0, total: evt.total_pages, records: 0 });
+              setStatusMsg('Extracting…');
+            } else if (evt.type === 'status') {
+              setStatusMsg(evt.message || '');
+            } else if (evt.type === 'page') {
+              setProgress({ page: evt.page, total: evt.total_pages, records: evt.total_records });
+              setStatusMsg('');
+            } else if (evt.type === 'done') {
+              if (evt.columns) evt.document._columns = evt.columns;
+              onExtracted(evt.document);
+              clearTimeout(timerId);
+              setLoad(false); setProgress(null); setStatusMsg('');
+              return;
+            } else if (evt.type === 'error') {
+              throw new Error(evt.message);
+            }
+          }
+        }
+      } else {
+        // ── Regular extraction for Excel ────────────────────────────────────
+        const res = await fetch(`${API}/extract`, {
+          method: 'POST', headers: { 'X-Model-Name': model }, body: form, signal: ctrl.signal
+        });
+        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`); }
+        const data = await res.json();
+        onExtracted(data.document);
+      }
+    } catch(e) {
+      if (e.name === 'AbortError') {
+        setError('Timeout: extraction took more than ' + (isPDF ? '5 min' : '3 min') + '. Check the selected model or try a faster model (e.g., Mistral Small 3.2).');
+      } else {
+        setError(e.message);
+      }
+    }
+    finally { clearTimeout(timerId); setLoad(false); setProgress(null); setStatusMsg(''); }
+  }
+
+  return (
+    <Accordion title="Step 1 — Upload FMEA Document" open={open} onToggle={onToggle}>
+      <div
+        onClick={() => inputRef.current.click()}
+        onDragOver={e => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={e => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files[0]; if (f) setF(f); }}
+        className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all
+          ${dragging ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+            : file    ? 'border-emerald-400 bg-emerald-50 dark:bg-emerald-900/20'
+            : 'border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 hover:border-blue-400 hover:bg-blue-50/40'}`}
+      >
+        <input ref={inputRef} type="file" accept=".pdf,.xlsx,.xls" className="hidden"
+          onChange={e => { if (e.target.files[0]) setF(e.target.files[0]); }} />
+        <div className="text-4xl mb-2">{file ? '📄' : '📂'}</div>
+        <p className="font-semibold text-slate-700 dark:text-slate-300">{file ? file.name : 'Drop your FMEA file here'}</p>
+        <p className="text-sm text-slate-400 mt-1">{file ? `${(file.size/1024).toFixed(1)} KB` : 'or click to browse — PDF or Excel'}</p>
+      </div>
+
+      {file && file.name.toLowerCase().endsWith('.pdf') && (
+        <div className="mt-3 flex items-center gap-3">
+          <label className="text-sm font-medium text-slate-600 dark:text-slate-400 whitespace-nowrap">Page range (optional):</label>
+          <input
+            type="text"
+            value={pageRange}
+            onChange={e => setPageRange(e.target.value)}
+            placeholder="e.g. 2-32, 40-42  (leave blank for all pages)"
+            disabled={loading}
+            className="flex-1 text-sm px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+          />
+        </div>
+      )}
+
+      {error && (
+        <div className="mt-3 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl text-sm text-red-600">{error}</div>
+      )}
+
+      {loading && progress && (
+        <div className="mt-4">
+          <div className="flex justify-between items-center mb-1">
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {progress.page > 0
+                ? `Page ${progress.page} of ${progress.total} — ${progress.records} record${progress.records!==1?'s':''} found`
+                : `Analyzing structure… (${progress.total} pages)`}
+            </p>
+            <p className="text-xs font-bold text-blue-600 dark:text-blue-400">
+              {progress.page > 0
+                ? `${Math.round(progress.page/Math.max(progress.total,1)*100)}%`
+                : '0%'}
+            </p>
+          </div>
+          <div className="h-3 rounded-full overflow-hidden bg-slate-200 dark:bg-slate-700">
+            <div className="h-3 bg-blue-600 rounded-full transition-all duration-500"
+                 style={{width: progress.page > 0
+                   ? `${Math.round(progress.page/Math.max(progress.total,1)*100)}%`
+                   : '2%'}} />
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={doExtract} disabled={!file || loading}
+        className="mt-4 w-full py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold rounded-xl flex items-center justify-center gap-2 transition-colors"
+      >
+        {loading
+          ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin-slow inline-block"></span>
+              {progress && progress.page > 0
+                ? `Page ${progress.page}/${progress.total} — ${progress.records} records… (${elapsed}s)`
+                : `Extracting… (${elapsed}s)`}
+            </>
+          : '⚡ Extract FMEA'}
+      </button>
+    </Accordion>
+  );
+}
+
+// ─── Step 1B — New FMEA ─────────────────────────────────────────────────────
+function NewFmeaSection({ open, onToggle, onCreated }) {
+  const [part, setPart]         = useState('');
+  const [supplier, setSupplier] = useState('');
+  const [rows, setRows]         = useState([]);
+
+  const addRow = () => setRows(r => [...r, {
+    component:'', function:'', failure_mode:'', effect:'', cause:'',
+    severity:'', occurrence:'', detection:'', current_controls_prevention:'', current_controls_detection:'', recommended_action:''
+  }]);
+  const removeRow = i => setRows(r => r.filter((_, idx) => idx !== i));
+  const updateRow = (i, f, v) => setRows(r => r.map((row, idx) => idx === i ? { ...row, [f]: v } : row));
+
+  function create() {
+    if (!rows.length) { alert('Add at least one failure mode row.'); return; }
+    const doc = {
+      part_name: part || 'New FMEA', supplier: supplier || '—', source_file: 'manual entry',
+      records: rows.map(r => ({
+        ...r,
+        severity:   +r.severity   || null,
+        occurrence: +r.occurrence || null,
+        detection:  +r.detection  || null,
+        rpn: (+r.severity && +r.occurrence && +r.detection) ? +r.severity * +r.occurrence * +r.detection : null
+      }))
+    };
+    onCreated(doc);
+    setRows([]); setPart(''); setSupplier('');
+  }
+
+  const inp = "w-full border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500";
+  const lbl = "block text-xs font-semibold uppercase tracking-wide text-slate-400 mb-1";
+
+  return (
+    <Accordion title="Step 1 — New FMEA" open={open} onToggle={onToggle}>
+      <div className="grid grid-cols-2 gap-4 mb-5">
+        <div><label className={lbl}>Part / System Name</label>
+          <input className={inp} value={part} onChange={e => setPart(e.target.value)} placeholder="e.g. Window Lifting Mechanism" />
+        </div>
+        <div><label className={lbl}>Supplier / Team</label>
+          <input className={inp} value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="e.g. Engineering Team A" />
+        </div>
+      </div>
+
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-semibold text-slate-600 dark:text-slate-300">Failure Mode Rows</span>
+        <button onClick={addRow} className="text-sm border border-slate-300 dark:border-slate-600 px-3 py-1.5 rounded-lg hover:border-blue-500 hover:text-blue-600 dark:text-slate-300 transition-colors">+ Add Row</button>
+      </div>
+
+      {!rows.length && <p className="text-center text-slate-400 text-sm py-4">No rows yet. Click + Add Row.</p>}
+
+      {rows.map((row, i) => (
+        <div key={i} className="border border-slate-200 dark:border-slate-600 rounded-xl p-4 mb-3 bg-slate-50 dark:bg-slate-900/40">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-bold text-slate-500">Row {i + 1}</span>
+            <button onClick={() => removeRow(i)} className="text-red-400 hover:text-red-600 text-xl leading-none">×</button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-3">
+            {[['component','Component'],['function','Function'],['failure_mode','Failure Mode'],['effect','Effect'],['cause','Cause']].map(([f,l]) => (
+              <div key={f}><label className={lbl}>{l}</label>
+                <input className={inp} value={row[f]} onChange={e => updateRow(i,f,e.target.value)} placeholder={l} />
+              </div>
+            ))}
+          </div>
+          <div className="grid grid-cols-3 sm:grid-cols-5 gap-3">
+            {[['severity','S'],['occurrence','O'],['detection','D']].map(([f,l]) => (
+              <div key={f}><label className={lbl}>{l} (1-10)</label>
+                <input type="number" min="1" max="10" className={`${inp} text-center`} value={row[f]}
+                  onChange={e => updateRow(i,f,e.target.value)} placeholder="—" />
+              </div>
+            ))}
+            {[['current_controls_prevention','Prev. Controls'],['current_controls_detection','Det. Controls'],['recommended_action','Action']].map(([f,l]) => (
+              <div key={f} className="col-span-1"><label className={lbl}>{l}</label>
+                <input className={inp} value={row[f]} onChange={e => updateRow(i,f,e.target.value)} placeholder={l} />
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {rows.length > 0 && (
+        <button onClick={create} className="w-full mt-2 py-3 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors">
+          Create FMEA
+        </button>
+      )}
+    </Accordion>
+  );
+}
+
+// ─── Editable Cell ───────────────────────────────────────────────────────────
+function EditableCell({ value, gi, field, onEdit, onAI, isSOD, isCritical = false }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft]     = useState(value ?? '');
+  const inputRef = useRef();
+
+  useEffect(() => { if (editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); } }, [editing]);
+
+  function commit() {
+    const v = isSOD ? (+draft || null) : draft;
+    onEdit(gi, field, v);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <td className="px-3 py-2 align-middle">
+        <input
+          ref={inputRef}
+          type={isSOD ? 'number' : 'text'}
+          min={isSOD ? 1 : undefined} max={isSOD ? 10 : undefined}
+          className="w-full border border-blue-500 bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-100 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
+        />
+      </td>
+    );
+  }
+
+  if (isSOD) {
+    return (
+      <td className="px-3 py-2 align-middle text-center">
+        <div className="flex items-center justify-center gap-1">
+          <span className={`inline-block min-w-[2rem] text-center px-2 py-0.5 rounded-md text-xs ${isCritical ? 'bg-red-100 text-red-700 border border-red-400 font-bold' : sodCls(value)}`}>{value ?? '—'}</span>
+          <button onClick={() => { setDraft(value ?? ''); setEditing(true); }} className="opacity-0 group-hover:opacity-100 text-xs hover:text-blue-600 transition-all" title="Edit">✏️</button>
+          <button onClick={() => onAI(gi, field)} className="opacity-0 group-hover:opacity-100 text-xs hover:text-violet-500 transition-all" title="AI Suggestion">✨</button>
+        </div>
+      </td>
+    );
+  }
+
+  return (
+    <td className="px-3 py-2 align-middle max-w-[240px]">
+      <div className="flex items-start gap-1 group">
+        <span className="flex-1 text-sm leading-relaxed break-words">{String(value ?? '—')}</span>
+        <div className="flex flex-col gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button onClick={() => { setDraft(value ?? ''); setEditing(true); }} className="text-xs hover:text-blue-600" title="Edit">✏️</button>
+          <button onClick={() => onAI(gi, field)} className="text-xs hover:text-violet-500" title="AI Suggestion">✨</button>
+        </div>
+      </div>
+    </td>
+  );
+}
+
+// ─── FMEA Table ──────────────────────────────────────────────────────────────
+function FmeaTable({ records, docRecords, colOrder, onEdit, onAI }) {
+  if (!records.length) return (
+    <p className="text-center text-slate-400 text-sm py-4">No records for this function.</p>
+  );
+
+  const SKIP_KEYS = new Set([
+    'function', 'item_function', 'component_function', 'fonction',
+    'component', 'source_file', 'sheet_name', 'row_number',
+  ]);
+  const SOD_SET   = new Set(['severity', 'occurrence', 'detection']);
+
+  // Single unified column list — use PDF order when available, else Object.keys order
+  const allKeys = colOrder.length > 0
+    ? [...new Set([...colOrder, ...records.flatMap(r => Object.keys(r))])]
+    : [...new Set(records.flatMap(r => Object.keys(r)))];
+  const allCols = allKeys.filter(k => !SKIP_KEYS.has(k));
+
+  function toLabel(k) {
+    return k.split('_').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+  }
+
+  const scrollRef = React.useRef(null);
+  const drag = React.useRef({ active: false, startX: 0, scrollLeft: 0 });
+
+  function onMouseDown(e) {
+    // ignore clicks on interactive elements so cells remain editable
+    if (e.target.closest('button,input,textarea,select,a')) return;
+    drag.current = { active: true, startX: e.pageX, scrollLeft: scrollRef.current.scrollLeft };
+    scrollRef.current.style.cursor = 'grabbing';
+    scrollRef.current.style.userSelect = 'none';
+  }
+  function onMouseMove(e) {
+    if (!drag.current.active) return;
+    e.preventDefault();
+    const dx = e.pageX - drag.current.startX;
+    scrollRef.current.scrollLeft = drag.current.scrollLeft - dx;
+  }
+  function stopDrag() {
+    drag.current.active = false;
+    if (scrollRef.current) {
+      scrollRef.current.style.cursor = 'grab';
+      scrollRef.current.style.userSelect = '';
+    }
+  }
+
+  return (
+    <div
+      ref={scrollRef}
+      className="overflow-x-auto rounded-xl border border-slate-200 dark:border-slate-700 mt-1"
+      style={{ cursor: 'grab' }}
+      onMouseDown={onMouseDown}
+      onMouseMove={onMouseMove}
+      onMouseUp={stopDrag}
+      onMouseLeave={stopDrag}
+    >
+      <table className="w-full text-sm bg-white dark:bg-slate-800">
+        <thead>
+          <tr className="bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-600">
+            {allCols.map(k => (
+              <th key={k} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide text-slate-400 whitespace-nowrap ${SOD_SET.has(k) || k === 'rpn' ? 'text-center' : 'text-left'}`}>{toLabel(k)}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {records.map(r => {
+            const gi  = docRecords.indexOf(r);
+            const rpn = (r.severity && r.occurrence && r.detection) ? r.severity * r.occurrence * r.detection : (r.rpn || null);
+            const isCritical = (r.severity ?? 0) >= 8 && (rpn ?? 0) > 36;
+            const totalCols  = allCols.length;
+            return (
+              <React.Fragment key={gi}>
+                {isCritical && (
+                  <tr>
+                    <td colSpan={totalCols} className="px-3 py-1 bg-red-50 dark:bg-red-900/20 border-l-4 border-red-500 text-red-600 dark:text-red-400 text-xs font-semibold text-left">
+                      ⚠ Exceeds the critical threshold of 36
+                    </td>
+                  </tr>
+                )}
+                <tr className="group border-b border-slate-100 dark:border-slate-700/50 last:border-0 hover:bg-blue-50/30 dark:hover:bg-slate-700/30 transition-colors">
+                  {allCols.map(k => {
+                    if (k === 'rpn') return (
+                      <td key="rpn" className="px-3 py-2 align-middle text-center">
+                        <span className={`inline-block px-2 py-0.5 rounded-md text-xs ${isCritical ? 'bg-red-100 text-red-700 border border-red-400 font-bold' : rpnCls(rpn)}`}>{rpn || '—'}</span>
+                      </td>
+                    );
+                    return (
+                      <EditableCell key={k} value={r[k]} gi={gi} field={k} onEdit={onEdit} onAI={onAI}
+                        isSOD={SOD_SET.has(k)}
+                        isCritical={isCritical && k === 'severity'} />
+                    );
+                  })}
+                </tr>
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// ─── Suggest Missing Failures Panel ─────────────────────────────────────────
+function SuggestMissingPanel({ doc, model, onAddFailure }) {
+  const [status, setStatus] = useState('idle'); // idle | loading | done | error
+  const [result, setResult] = useState(null);
+  const [error,  setError]  = useState('');
+
+  async function analyze() {
+    setStatus('loading');
+    setResult(null);
+    setError('');
+
+    const fnMap = groupByFn(doc.records);
+    const functions = [...fnMap.entries()].map(([fn, records]) => ({
+      function: fn,
+      existing_failures: records.map(r => r.failure_mode).filter(Boolean),
+    }));
+
+    try {
+      const res = await fetch(`${API}/suggest-missing-failures`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ part_name: doc.part_name, functions, model_name: model }),
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`); }
+      const data = await res.json();
+      setResult(data);
+      setStatus('done');
+    } catch(e) {
+      setError(e.message);
+      setStatus('error');
+    }
+  }
+
+  function reset() { setStatus('idle'); setResult(null); setError(''); }
+
+  return (
+    <div className="mt-6 pt-5 border-t border-slate-200 dark:border-slate-700">
+
+      {/* Trigger button */}
+      {status === 'idle' && (
+        <button
+          onClick={analyze}
+          className="w-full py-3 border-2 border-dashed border-blue-300 dark:border-blue-700 text-blue-600 dark:text-blue-400 rounded-xl hover:border-blue-500 hover:bg-blue-50/40 dark:hover:bg-blue-900/20 font-semibold text-sm transition-all flex items-center justify-center gap-2"
+        >
+          🔍 Analyse Unreported Potential Failure Modes
+        </button>
+      )}
+
+      {/* Loading */}
+      {status === 'loading' && (
+        <div className="flex items-center justify-center gap-3 py-8 text-slate-500 dark:text-slate-400">
+          <span className="w-5 h-5 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin-slow inline-block"></span>
+          <span className="text-sm font-medium">Consulting specialist agent…</span>
+        </div>
+      )}
+
+      {/* Error */}
+      {status === 'error' && (
+        <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl text-sm text-red-600 dark:text-red-400 flex items-center justify-between">
+          <span>{error}</span>
+          <button onClick={reset} className="ml-3 text-red-400 hover:text-red-600 text-xl leading-none">×</button>
+        </div>
+      )}
+
+      {/* Results */}
+      {status === 'done' && result && (
+        <div>
+          {result.all_covered ? (
+            <div className="p-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-300 dark:border-emerald-700 rounded-xl text-sm text-emerald-700 dark:text-emerald-400 font-semibold text-center flex items-center justify-center gap-2">
+              ✅ Maximum coverage reached — no additional significant failure modes identified.
+            </div>
+          ) : (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-slate-700 dark:text-slate-200 text-sm">
+                  Unreported Potential Failure Modes
+                </h4>
+                <span className="text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full font-medium border border-amber-200 dark:border-amber-700">
+                  {result.suggestions.length} suggestion{result.suggestions.length !== 1 ? 's' : ''}
+                </span>
+              </div>
+
+              {result.suggestions.map((s, i) => (
+                <div key={i} className="border border-amber-200 dark:border-amber-700 rounded-xl p-4 mb-3 bg-amber-50/50 dark:bg-amber-900/10">
+                  <div className="flex items-start justify-between gap-3 mb-3">
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wide text-amber-500 mr-1.5">Function:</span>
+                      <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{s.function}</span>
+                    </div>
+                    <button
+                      onClick={() => onAddFailure(s)}
+                      className="shrink-0 text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors"
+                    >
+                      + Add to FMEA
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm mb-2">
+                    {[['Failure Mode', s.failure_mode], ['Effect', s.effect], ['Cause', s.cause]].map(([lbl, val]) => (
+                      <div key={lbl}>
+                        <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-0.5">{lbl}</p>
+                        <p className="text-slate-700 dark:text-slate-300 leading-snug">{val}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  {s.justification && (
+                    <div className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed border-t border-amber-100 dark:border-amber-800 pt-2 mt-1">
+                      <span className="font-bold uppercase tracking-wide">Justification: </span>{s.justification}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <button
+            onClick={reset}
+            className="mt-2 w-full py-2 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+          >
+            ↺ Run new analysis
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Step 2 — Results ────────────────────────────────────────────────────────
+function ResultsSection({ open, onToggle, doc, onReset, onEdit, onAI, model, onAddSuggestedFailure }) {
+  const [activeFn, setActiveFn] = useState(0);
+
+  useEffect(() => { setActiveFn(0); }, [doc]);
+
+  if (!doc) {
+    return (
+      <Accordion title="Step 2 — FMEA Analysis Results" open={open} onToggle={onToggle}>
+        <p className="text-center text-slate-400 py-8 text-sm">Extract or create a document first.</p>
+      </Accordion>
+    );
+  }
+
+  const fnMap  = groupByFn(doc.records);
+  const fnList = [...fnMap.keys()];
+
+  return (
+    <Accordion title="Step 2 — FMEA Analysis Results" open={open} onToggle={onToggle} badge={`${doc.records.length} records`}>
+
+      {/* Doc banner */}
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5 pb-4 border-b border-slate-100 dark:border-slate-700">
+        <div className="flex flex-wrap gap-4 text-sm text-slate-700 dark:text-slate-300">
+          {[['Part', doc.part_name], ['Supplier', doc.supplier], ['File', doc.source_file]].map(([l,v]) => (
+            <span key={l}><span className="text-xs font-bold uppercase text-slate-400 mr-1">{l}</span>{v}</span>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={onReset} className="text-sm border border-slate-300 dark:border-slate-600 px-3 py-1.5 rounded-lg hover:border-blue-500 hover:text-blue-600 dark:text-slate-300 transition-colors">
+            ← New Document
+          </button>
+          <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-blue-500 text-white border border-blue-500 cursor-not-allowed opacity-75">
+            FMEA Dashboards
+          </button>
+          <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-green-600 text-white border border-green-600 cursor-not-allowed opacity-75">
+            FMEA Report
+          </button>
+        </div>
+      </div>
+
+      {/* Function badges */}
+      {fnList.length > 1 && (
+        <div className="flex flex-wrap gap-2 mb-5 p-3 bg-slate-50 dark:bg-slate-700/30 rounded-xl border border-slate-100 dark:border-slate-700">
+          {fnList.map((fn, i) => (
+            <button
+              key={i} onClick={() => setActiveFn(i)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium border transition-all
+                ${activeFn === i
+                  ? 'bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200 dark:shadow-none'
+                  : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:border-blue-400 hover:text-blue-600'}`}
+            >
+              <span className={`text-xs font-bold px-1.5 py-0.5 rounded-full ${activeFn === i ? 'bg-white/20' : 'bg-slate-100 dark:bg-slate-700 text-slate-500'}`}>F{i+1}</span>
+              <span className="max-w-[200px] truncate">{fn}</span>
+              <span className={`text-xs px-1.5 py-0.5 rounded-full ${activeFn === i ? 'bg-white/20' : 'bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400'}`}>{fnMap.get(fn).length}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Active function header */}
+      <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 rounded-xl px-4 py-3 mb-3">
+        <div className="flex items-center gap-2">
+          <span className="text-blue-600 font-bold text-sm">F{activeFn + 1}</span>
+          <span className="font-semibold text-slate-700 dark:text-slate-200 text-sm">{fnList[activeFn]}</span>
+        </div>
+        <span className="text-xs text-slate-400">
+          {fnMap.get(fnList[activeFn]).length} failure mode{fnMap.get(fnList[activeFn]).length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      <FmeaTable
+        records={fnMap.get(fnList[activeFn])}
+        docRecords={doc.records}
+        colOrder={doc._columns || []}
+        onEdit={onEdit}
+        onAI={onAI}
+      />
+
+      <SuggestMissingPanel doc={doc} model={model} onAddFailure={onAddSuggestedFailure} />
+    </Accordion>
+  );
+}
+
+// ─── AI Audit Modal ──────────────────────────────────────────────────────────
+function AIModal({ modal, onApply, onClose }) {
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', h);
+    return () => document.removeEventListener('keydown', h);
+  }, [onClose]);
+
+  if (!modal.open) return null;
+  const { field, functionName, failureMode, currentValue, loading, data, error } = modal;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700">
+
+        {/* Modal header */}
+        <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100 dark:border-slate-700">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 dark:text-white">Knowledge Engineering Audit</h2>
+            {functionName && (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-medium">
+                Function: <span className="font-semibold">{functionName}</span>
+              </p>
+            )}
+            {failureMode && (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 font-medium">
+                Failure Mode: <span className="font-semibold">{failureMode}</span>
+              </p>
+            )}
+            <p className="text-xs text-slate-400 mt-1">
+              Field: <span className="font-semibold text-blue-600">{field}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none mt-0.5 transition-colors">×</button>
+        </div>
+
+        {/* Modal body */}
+        <div className="px-6 py-5">
+
+          {loading && (
+            <div className="flex items-center justify-center gap-3 py-12 text-slate-400">
+              <span className="w-6 h-6 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin-slow inline-block"></span>
+              Consulting specialist agent…
+            </div>
+          )}
+
+          {error && (
+            <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 rounded-xl text-sm text-red-600">{error}</div>
+          )}
+
+          {!loading && !error && data && (
+            <>
+              {/* Agent badge */}
+              <div className="mb-5">
+                <span
+                  className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold border"
+                  style={{ background: `${data.agent_color}18`, color: data.agent_color, borderColor: `${data.agent_color}44` }}
+                >
+                  🤖 {data.agent_name}
+                </span>
+              </div>
+
+              {/* Comparison view */}
+              <div className="grid grid-cols-2 gap-4 mb-5">
+                <div className="bg-slate-50 dark:bg-slate-700/50 rounded-xl p-4 border border-slate-200 dark:border-slate-600">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-3">Current Value</p>
+                  <p className="text-base font-semibold text-slate-600 dark:text-slate-300 break-all">
+                    {String(currentValue ?? '—')}
+                  </p>
+                </div>
+                <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 border border-blue-200 dark:border-blue-700">
+                  <p className="text-xs font-bold uppercase tracking-wide text-blue-500 mb-3">AI Suggested Value</p>
+                  <p className="text-base font-semibold text-blue-600 dark:text-blue-400 break-all">
+                    {String(data.suggested_value ?? '—')}
+                  </p>
+                </div>
+              </div>
+
+              {/* Engineering justification */}
+              <div className="mb-5">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Engineering Justification</p>
+                <div className="bg-slate-50 dark:bg-slate-700/40 rounded-xl p-4 text-sm leading-relaxed text-slate-700 dark:text-slate-300 border border-slate-100 dark:border-slate-600">
+                  {data.justification}
+                </div>
+              </div>
+
+              {/* Sources & References */}
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Sources & References</p>
+                <div className="flex flex-wrap gap-2">
+                  {(data.sources || []).length
+                    ? data.sources.map((s, i) => (
+                        <span key={i} className="inline-flex items-center gap-1.5 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400">
+                          {s}
+                        </span>
+                      ))
+                    : <span className="text-xs text-slate-400">No sources provided</span>
+                  }
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Modal footer */}
+        {!loading && !error && data && (
+          <div className="flex gap-3 px-6 py-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 rounded-b-2xl">
+            <button
+              onClick={() => onApply(String(data.suggested_value ?? ''))}
+              className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors"
+            >
+              Apply Suggestion
+            </button>
+            <button
+              onClick={onClose}
+              className="px-6 py-2.5 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl transition-colors"
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={() => {}}
+              className="px-5 py-2.5 bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white font-semibold rounded-xl transition-colors"
+            >
+              Interactive AI Meeting
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── App ─────────────────────────────────────────────────────────────────────
+// ─── Knowledge Base Section ──────────────────────────────────────────────────
+// ─── App ─────────────────────────────────────────────────────────────────────
+function App() {
+  const [dark,  setDark]  = useState(false);
+  const [model, setModel] = useState('qwen3527b-no-think');
+  const [doc,   setDoc]   = useState(null);
+
+  const [openAbout, setOpenAbout] = useState(false);
+  const [open1A,    setOpen1A]    = useState(true);
+  const [open1B,    setOpen1B]    = useState(false);
+  const [open2,     setOpen2]     = useState(false);
+
+  const [modal, setModal] = useState({
+    open: false, recordIdx: null, field: '', currentValue: null,
+    loading: false, data: null, error: ''
+  });
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', dark);
+    document.body.className = dark
+      ? 'bg-slate-900 text-slate-100 transition-colors'
+      : 'bg-slate-50 text-slate-900 transition-colors';
+  }, [dark]);
+
+  function handleExtracted(newDoc) {
+    setDoc(newDoc);
+    setOpen1A(false); setOpen1B(false); setOpen2(true);
+  }
+
+  function handleReset() {
+    setDoc(null); setOpen1A(true); setOpen2(false);
+  }
+
+  function handleEdit(gi, field, value) {
+    setDoc(prev => ({
+      ...prev,
+      records: prev.records.map((r, i) => {
+        if (i !== gi) return r;
+        const updated = { ...r, [field]: value };
+        if (['severity', 'occurrence', 'detection'].includes(field)) {
+          const s = +updated.severity, o = +updated.occurrence, d = +updated.detection;
+          updated.rpn = (s && o && d) ? s * o * d : null;
+        }
+        return updated;
+      })
+    }));
+  }
+
+  async function handleAI(gi, field) {
+    const r = doc.records[gi];
+    setModal({ open: true, recordIdx: gi, field, currentValue: r[field], functionName: r.function || r.component || '', failureMode: r.failure_mode || '', loading: true, data: null, error: '' });
+    try {
+      const res = await fetch(`${API}/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          field,
+          function:     r.function || r.component || '',
+          failure_mode: r.failure_mode || '',
+          context:      `Part: ${doc.part_name}. Component: ${r.component || ''}`,
+          model_name:   model
+        })
+      });
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`); }
+      const data = await res.json();
+      setModal(m => ({ ...m, loading: false, data }));
+    } catch(e) {
+      setModal(m => ({ ...m, loading: false, error: e.message }));
+    }
+  }
+
+  function applyAI(value) {
+    if (modal.recordIdx !== null) handleEdit(modal.recordIdx, modal.field, value);
+    setModal(m => ({ ...m, open: false }));
+  }
+
+  function handleAddSuggestedFailure(suggestion) {
+    // Find the component name used for the matching function
+    const existing = doc.records.find(
+      r => (r.function || r.component || '') === suggestion.function
+    );
+    const component = existing ? (existing.component || '') : '';
+
+    const newRecord = {
+      component,
+      function:     suggestion.function,
+      failure_mode: suggestion.failure_mode,
+      effect:       suggestion.effect,
+      cause:        suggestion.cause,
+      severity:     null,
+      occurrence:   null,
+      detection:    null,
+      rpn:          null,
+      current_controls_prevention: '',
+      current_controls_detection:  '',
+      recommended_action:          '',
+      source_file:  'AI suggestion',
+    };
+
+    setDoc(prev => ({ ...prev, records: [...prev.records, newRecord] }));
+  }
+
+  return (
+    <div className="min-h-screen transition-colors duration-300">
+      <div className="max-w-screen-xl mx-auto px-6 py-8">
+
+        <Header model={model} setModel={setModel} dark={dark} toggleDark={() => setDark(d => !d)} />
+
+        <Accordion title="About" open={openAbout} onToggle={() => setOpenAbout(o => !o)}>
+          <ul className="space-y-2.5 text-sm">
+            {['Multi-Agent Orchestration','Knowledge Engineering','Human-in-the-Loop (HITL)'].map(item => (
+              <li key={item} className="flex items-center gap-2.5">
+                <span className="w-2 h-2 rounded-full bg-blue-500 shrink-0"></span>
+                <strong className="text-slate-700 dark:text-slate-300">{item}</strong>
+              </li>
+            ))}
+          </ul>
+        </Accordion>
+
+        <div className="flex items-stretch gap-0">
+          <div className="flex-1"><UploadSection  open={open1A} onToggle={() => setOpen1A(o => !o)} model={model} onExtracted={handleExtracted} /></div>
+          <div className="flex items-center justify-center px-4">
+            <span className="text-xs font-bold text-slate-400 bg-slate-100 dark:bg-slate-700 dark:text-slate-500 px-2 py-1 rounded-full border border-slate-200 dark:border-slate-600">OR</span>
+          </div>
+          <div className="flex-1"><NewFmeaSection open={open1B} onToggle={() => setOpen1B(o => !o)} onCreated={handleExtracted} /></div>
+        </div>
+        <ResultsSection open={open2}  onToggle={() => setOpen2(o =>  !o)} doc={doc} onReset={handleReset} onEdit={handleEdit} onAI={handleAI} model={model} onAddSuggestedFailure={handleAddSuggestedFailure} />
+
+        <AIModal modal={modal} onApply={applyAI} onClose={() => setModal(m => ({ ...m, open: false }))} />
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

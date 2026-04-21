@@ -1,0 +1,99 @@
+version: "3.9"
+
+# ============================================================================
+# AI-Driven FMEA 5.0 — Docker Compose
+#
+# Services:
+#   db    — PostgreSQL 16         (localhost:5432)
+#   api   — FastAPI + AI Agents   (http://localhost:8000)
+#   web   — React + Vite UI       (http://localhost:5173)
+#
+# Usage:
+#   docker compose up --build        # first run
+#   docker compose up -d             # detached mode
+#   docker compose down              # stop (data persists in 'fmea_pgdata' volume)
+#   docker compose down -v           # stop AND wipe the database
+#
+# Environment variables:
+#   Copy .env.example to .env and fill in your UTC platform key.
+# ============================================================================
+
+services:
+
+  # --------------------------------------------------------------------------
+  # DB — PostgreSQL 16 (official image, no build needed)
+  # --------------------------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    container_name: fmea_db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-fmea}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-fmea_secret}
+      - POSTGRES_DB=${POSTGRES_DB:-fmea_db}
+    volumes:
+      - fmea_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fmea} -d ${POSTGRES_DB:-fmea_db}"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  # --------------------------------------------------------------------------
+  # API — FastAPI + AI Agents
+  # --------------------------------------------------------------------------
+  api:
+    build:
+      context:    .
+      dockerfile: backend/Dockerfile
+    container_name: fmea_api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - LLM_BASE_URL=${LLM_BASE_URL:-https://ia.beta.utc.fr/api/v1}
+      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-qwen3527b-no-think}
+      - UTCLLM_API_KEY=${UTCLLM_API_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-fmea}:${POSTGRES_PASSWORD:-fmea_secret}@db:5432/${POSTGRES_DB:-fmea_db}
+    volumes:
+      # Mount source dirs for hot-reload during development
+      - ./src:/app/src:ro
+      - ./backend:/app/backend
+      - ./translations:/app/translations:ro
+      # Persist ChromaDB vector store across restarts
+      - ./data/vector_store:/app/data/vector_store
+      # Books folder (read-only) for RAG indexing
+      - ./Books:/app/Books:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout:  10s
+      retries:  3
+
+  # --------------------------------------------------------------------------
+  # WEB — nginx serving fmea_app.html
+  # --------------------------------------------------------------------------
+  web:
+    build:
+      context:    .                    # project root (where fmea_app.html is)
+      dockerfile: frontend/Dockerfile
+    container_name: fmea_web
+    restart: unless-stopped
+    ports:
+      - "5173:80"                      # nginx escuta na 80 internamente
+    volumes:
+      - ./fmea_app.html:/usr/share/nginx/html/index.html:ro   # live reload
+    depends_on:
+      api:
+        condition: service_healthy
+
+# --------------------------------------------------------------------------
+# Named volumes (data persists between container restarts)
+# --------------------------------------------------------------------------
+volumes:
+  fmea_pgdata:
