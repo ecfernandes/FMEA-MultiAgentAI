@@ -202,7 +202,7 @@ def main():
         print("=" * 60)
         print("\n💡 Next steps:")
         print("  1. Install dependency: pip install langdetect")
-        print("  2. Run app: streamlit run app.py")
+        print("  2. Run app: uvicorn backend.main:app --reload --port 8001")
         print("  3. Test with real documents in PT/FR/EN")
         print("  4. Validate RAG finding similar cases across languages\n")
         

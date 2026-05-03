@@ -289,7 +289,7 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
     )
 
     base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-    model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     val: Optional[str | int] = None
     justification = "Agent call failed — check API key and connection."

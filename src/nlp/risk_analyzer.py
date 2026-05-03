@@ -25,7 +25,7 @@ class RiskAnalyzer:
             language:   Language for risk analysis (en, fr, pt-br)
         """
         base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-        self.model_name  = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+        self.model_name  = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
         self.temperature = temperature
         self.language    = language
         self.client      = OpenAI(api_key=api_key, base_url=base_url)

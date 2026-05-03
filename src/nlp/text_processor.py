@@ -16,7 +16,7 @@ def extract_text_from_pdf(file) -> str:
     Extract text from a PDF file.
     
     Args:
-        file: File object (uploaded via Streamlit)
+        file: File object (uploaded via FastAPI or any file-like source)
     
     Returns:
         str: Extracted text.

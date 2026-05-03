@@ -3,10 +3,8 @@ backend/main.py
 ---------------
 FastAPI server for AI-Driven FMEA 5.0.
 
-Replaces the Streamlit app2.py as the backend orchestrator.
-The Streamlit UI (ui.py / app2.py) continues to work unchanged — this server
-provides an independent, headless REST API for professional integrations,
-Docker deployments, and future React/web frontends.
+Headless REST API for professional integrations, Docker deployments,
+and the React frontend.
 
 Start the server:
     uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
@@ -21,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -46,11 +45,27 @@ _ENV_FILE = Path(__file__).parent.parent / ".env"
 load_dotenv(dotenv_path=_ENV_FILE, override=True)
 
 # ============================================================================
+# LIFESPAN — startup / shutdown hooks
+# ============================================================================
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialise DB tables and MinIO buckets on startup; dispose engine on shutdown."""
+    from backend.database import create_tables, get_engine
+    from backend.storage import ensure_buckets
+    await create_tables()
+    await ensure_buckets()
+    yield
+    await get_engine().dispose()
+
+
+# ============================================================================
 # APP FACTORY
 # ============================================================================
 
 app = FastAPI(
     title       = "AI-Driven FMEA 5.0 API",
+    lifespan    = lifespan,
     description = (
         "REST backend for multi-agent FMEA analysis.\n\n"
         "**Endpoints**\n"
@@ -479,7 +494,7 @@ async def suggest_missing_failures(
     )
 
     base_url   = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-    model_name = body.model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    model_name = body.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     def _repair_truncated_json(raw: str) -> str:
         """

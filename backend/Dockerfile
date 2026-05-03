@@ -13,11 +13,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install backend-only dependencies (layer cache)
-# Uses backend/requirements.txt — much lighter than the root requirements.txt
-# (no torch, transformers, spacy, streamlit, etc.)
-COPY backend/requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Poetry (pinned to same version used locally)
+RUN pip install --no-cache-dir poetry==2.1.3
+
+# Copy only dependency files first — maximises Docker layer cache.
+# If pyproject.toml/poetry.lock don't change, this layer is reused.
+COPY pyproject.toml poetry.lock ./
+
+# Install production deps from the lock file directly into the system Python.
+# --only main   → skip [dev] group (pytest etc.)
+# --no-root     → don't try to install the project itself as a package
+# virtualenvs.create false → no venv inside container (cleaner for Docker)
+RUN poetry config virtualenvs.create false \
+    && poetry install --only main --no-root
 
 # Copy source
 COPY . .
@@ -31,5 +39,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# --reload enables hot-reload when source files change via Docker volume
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

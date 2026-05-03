@@ -4,9 +4,10 @@ version: "3.9"
 # AI-Driven FMEA 5.0 — Docker Compose
 #
 # Services:
-#   db    — PostgreSQL 16         (localhost:5432)
-#   api   — FastAPI + AI Agents   (http://localhost:8000)
-#   web   — React + Vite UI       (http://localhost:5173)
+#   db     — PostgreSQL 16         (localhost:5433)
+#   minio  — MinIO object storage  (API: localhost:9000 | Console: localhost:9001)
+#   api    — FastAPI + AI Agents   (http://localhost:8001)
+#   web    — React + Vite UI       (http://localhost:5174)
 #
 # Usage:
 #   docker compose up --build        # first run
@@ -25,10 +26,10 @@ services:
   # --------------------------------------------------------------------------
   db:
     image: postgres:16-alpine
-    container_name: fmea_db
+    container_name: multiagent-fmea-db
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "5433:5432"
     environment:
       - POSTGRES_USER=${POSTGRES_USER:-fmea}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-fmea_secret}
@@ -48,15 +49,19 @@ services:
     build:
       context:    .
       dockerfile: backend/Dockerfile
-    container_name: fmea_api
+    container_name: multiagent-fmea-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://ia.beta.utc.fr/api/v1}
-      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-qwen3527b-no-think}
+      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-RedHatAI/Qwen3.6-35B-A3B-NVFP4}
       - UTCLLM_API_KEY=${UTCLLM_API_KEY}
-      - DATABASE_URL=postgresql://${POSTGRES_USER:-fmea}:${POSTGRES_PASSWORD:-fmea_secret}@db:5432/${POSTGRES_DB:-fmea_db}
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-fmea}:${POSTGRES_PASSWORD:-fmea_secret}@db:5432/${POSTGRES_DB:-fmea_db}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-fmea_minio}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:-minio_secret}
+      - MINIO_SECURE=false
     volumes:
       # Mount source dirs for hot-reload during development
       - ./src:/app/src:ro
@@ -69,11 +74,35 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout:  10s
       retries:  3
+
+  # --------------------------------------------------------------------------
+  # MINIO — Object storage for PDFs, audio, video files (S3-compatible)
+  # --------------------------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: multiagent-fmea-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"   # S3-compatible API
+      - "9001:9001"   # Web console UI
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-fmea_minio}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:-minio_secret}
+    volumes:
+      - fmea_minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
 
   # --------------------------------------------------------------------------
   # WEB — nginx serving fmea_app.html
@@ -82,10 +111,10 @@ services:
     build:
       context:    .                    # project root (where fmea_app.html is)
       dockerfile: frontend/Dockerfile
-    container_name: fmea_web
+    container_name: multiagent-fmea-web
     restart: unless-stopped
     ports:
-      - "5173:80"                      # nginx escuta na 80 internamente
+      - "5174:80"                      # nginx escuta na 80 internamente
     volumes:
       - ./fmea_app.html:/usr/share/nginx/html/index.html:ro   # live reload
     depends_on:
@@ -97,3 +126,4 @@ services:
 # --------------------------------------------------------------------------
 volumes:
   fmea_pgdata:
+  fmea_minio_data:

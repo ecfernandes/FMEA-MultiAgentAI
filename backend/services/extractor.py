@@ -200,7 +200,7 @@ async def extract_from_excel_bytes(
     if not api_key:
         api_key = os.getenv("UTCLLM_API_KEY", "")
 
-    _model = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    _model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     def _sync_llm():
         from src.preprocessing.fmea_pdf_extractor import (
@@ -284,7 +284,7 @@ async def extract_from_pdf_bytes(
     """
     from src.preprocessing.fmea_pdf_extractor import extract_fmea_from_pdf_bytes
 
-    _model = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    _model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     def _sync_extract():
         return extract_fmea_from_pdf_bytes(

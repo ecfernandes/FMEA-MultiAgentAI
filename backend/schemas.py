@@ -8,8 +8,8 @@ These models serve as the strict data contract between:
   - The AI agents (field suggestion requests)
   - The HTTP API (request / response shapes)
 
-They are intentionally decoupled from the Streamlit dataclasses in
-src/preprocessing/fmea_schema.py so the backend can evolve independently.
+They are intentionally decoupled from src/preprocessing/fmea_schema.py
+so the backend can evolve independently.
 """
 
 from __future__ import annotations

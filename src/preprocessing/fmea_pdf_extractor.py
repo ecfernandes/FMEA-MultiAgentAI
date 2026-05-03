@@ -445,7 +445,7 @@ def extract_fmea_page(
         (columns, records, last_fn, part_name, supplier)
         part_name / supplier are None for pages 2+.
     """
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     if not known_columns:
         # First page — full discovery; choose prompt based on format
@@ -502,7 +502,7 @@ def _discover_columns_from_pages(
     Returns (best_columns, part_name, supplier, best_page_idx).
     """
     import json as _json
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
     best_columns: List[str] = []
     part_name = "Unknown"
     supplier  = "Unknown"
@@ -692,7 +692,7 @@ def extract_fmea_header(raw_text: str, api_key: str, model_name: str | None = No
     Legacy header-only extraction (part_name, supplier, functions list).
     Kept for backward compatibility with api.py and test suites.
     """
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     system_msg = _SYSTEM_PROMPT + (
         "\n\nIMPORTANT: Return ONLY a valid JSON object with exactly these keys: "
@@ -731,7 +731,7 @@ def extract_fmea_full(
         json.JSONDecodeError: Malformed JSON from the model.
         pydantic.ValidationError: Schema mismatch.
     """
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "qwen3527b-no-think")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     user_msg = (
         "Extract the complete FMEA table from the document below.\n\n"
@@ -944,7 +944,7 @@ def header_to_fmea_document(
 
 
 # ============================================================================
-# PUBLIC CONVENIENCE — used by both FastAPI and Streamlit
+# PUBLIC CONVENIENCE — used by FastAPI and other callers
 # ============================================================================
 
 def extract_fmea_from_pdf_bytes(

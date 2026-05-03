@@ -42,18 +42,28 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
-const API = 'http://localhost:8000';
+// Auto-detect API URL:
+// - port 5174 (new Docker) → API on 8001
+// - port 5173 (legacy)     → API on 8000
+// - file:// access         → API on 8001 (default new)
+const _apiPort = window.location.port === '5173' ? '8000' : '8001';
+const API = window.location.hostname
+  ? `http://${window.location.hostname}:${_apiPort}`
+  : 'http://localhost:8001';
 
 const MODELS = [
-  { value: 'qwen3527b-no-think',                                  label: 'Qwen3.5 27b (no-think) ★', recommended: true },
-  { value: 'mistral-small3.2:latest',                             label: 'Mistral Small 3.2 · 24B' },
-  { value: 'hf.co/unsloth/Magistral-Small-2509-GGUF:UD-Q4_K_XL', label: 'Magistral Small 2509 · 23.6B' },
-  { value: 'ministral-3:3b',                                      label: 'Ministral 3 · 3.8B ⚠ not for extraction', weak: true },
-  { value: 'glm-4.7-flash:latest',                                label: 'GLM 4.7 Flash · 29.9B' },
-  { value: 'hf.co/unsloth/Olmo-3.1-32B-Instruct-GGUF:Q4_K_M',   label: 'Olmo 3.1 · 32B' },
-  { value: 'hf.co/unsloth/Olmo-3.1-32B-Think-GGUF:Q4_K_M',      label: 'Olmo 3.1 Think · 32B' },
-  { value: 'devstral-small-2:latest',                             label: 'Devstral Small 2 · 24B' },
-  { value: 'gemma4:31b',                                          label: 'Gemma 4 · 31B' },
+  { value: 'RedHatAI/Qwen3.6-35B-A3B-NVFP4',                       label: 'Qwen3.6 · 35B A3B ★ (recommended)', recommended: true },
+  { value: 'qwen36---35b-a3b--bias-important---exprimental',        label: 'Qwen3.6 · 35B A3B (experimental)' },
+  { value: 'qwen3527b-no-think',                                    label: 'Qwen3.5 · 27B (legacy)' },
+  { value: 'mistral-small3.2:latest',                               label: 'Mistral Small 3.2 · 24B' },
+  { value: 'hf.co/unsloth/Magistral-Small-2509-GGUF:UD-Q4_K_XL',   label: 'Magistral Small 1.2 · 23.6B' },
+  { value: 'glm-4.7-flash:latest',                                  label: 'GLM 4.7 Flash · 29.9B' },
+  { value: 'nvidia/Gemma-4-31B-IT-NVFP4',                           label: 'Gemma 4 · 31B (new server test)' },
+  { value: 'gemma4:31b',                                            label: 'Gemma 4 · 31B (experimental)' },
+  { value: 'hf.co/unsloth/Olmo-3.1-32B-Instruct-GGUF:Q4_K_M',     label: 'Olmo 3.1 · 32B (experimental, open data)' },
+  { value: 'hf.co/unsloth/Olmo-3.1-32B-Think-GGUF:Q4_K_M',        label: 'Olmo 3.1 Think · 32B (experimental, open data)' },
+  { value: 'devstral-small-2:latest',                               label: 'Devstral Small 2 · 24B (coding-focused)' },
+  { value: 'ministral-3:3b',                                        label: 'Ministral 3 · 3.8B ⚠ too small for FMEA extraction', weak: true },
 ];
 
 // ─── Utilities ──────────────────────────────────────────────────────────────
@@ -695,6 +705,41 @@ function ResultsSection({ open, onToggle, doc, onReset, onEdit, onAI, model, onA
     );
   }
 
+  if (!doc.records || !Array.isArray(doc.records)) {
+    return (
+      <Accordion title="Step 2 — FMEA Analysis Results" open={open} onToggle={onToggle}>
+        <div className="text-center py-8">
+          <p className="text-red-600 font-semibold mb-2">⚠️ Invalid document structure</p>
+          <p className="text-sm text-slate-500">The document is missing the 'records' array.</p>
+          <pre className="mt-4 p-4 bg-slate-100 dark:bg-slate-800 rounded text-xs text-left overflow-auto max-h-60">
+            {JSON.stringify(doc, null, 2)}
+          </pre>
+        </div>
+      </Accordion>
+    );
+  }
+
+  if (doc.records.length === 0) {
+    return (
+      <Accordion title="Step 2 — FMEA Analysis Results" open={open} onToggle={onToggle} badge="0 records">
+        <div className="text-center py-12">
+          <div className="text-6xl mb-4">📭</div>
+          <p className="text-slate-600 dark:text-slate-300 font-semibold mb-2">No FMEA records found</p>
+          <p className="text-sm text-slate-500">The extraction completed but found 0 records in the document.</p>
+          <p className="text-sm text-slate-500 mt-2">This could mean:</p>
+          <ul className="text-sm text-slate-500 mt-2 list-disc list-inside">
+            <li>The document doesn't contain a recognizable FMEA table</li>
+            <li>The table format is not supported</li>
+            <li>Try a different page range or model</li>
+          </ul>
+          <button onClick={onReset} className="mt-6 text-sm border border-blue-500 text-blue-600 px-4 py-2 rounded-lg hover:bg-blue-50 transition-colors">
+            ← Try Another Document
+          </button>
+        </div>
+      </Accordion>
+    );
+  }
+
   const fnMap  = groupByFn(doc.records);
   const fnList = [...fnMap.keys()];
 
@@ -904,7 +949,7 @@ function AIModal({ modal, onApply, onClose }) {
 // ─── App ─────────────────────────────────────────────────────────────────────
 function App() {
   const [dark,  setDark]  = useState(false);
-  const [model, setModel] = useState('qwen3527b-no-think');
+  const [model, setModel] = useState('RedHatAI/Qwen3.6-35B-A3B-NVFP4');
   const [doc,   setDoc]   = useState(null);
 
   const [openAbout, setOpenAbout] = useState(false);

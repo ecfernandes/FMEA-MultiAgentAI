@@ -1,72 +1,106 @@
 # An Integrated Multi-Agent System for AI-Driven FMEA Auditing
 
-
 ## Postdoctoral Research Project
-**UTC (France) | CIT (Japan)** 
+**UTC (France) | CIT (Japan)**
 **Researcher:** Ederson Carvalhar Fernandes
 
+---
 
-### Quick Start
+## Quick Start (Docker — recommended)
 
-
-1. Install backend dependencies:
 ```bash
-cd backend
-pip install -r requirements.txt
+cp .env.example .env        # fill in UTCLLM_API_KEY and other vars
+docker compose up --build   # first run: builds and starts everything
+docker compose up           # subsequent runs (no rebuild needed)
 ```
 
-2. Start the backend (FastAPI):
+The app is available at:
+- **UI:** http://localhost:5174 (or open `fmea_app.html` directly in the browser)
+- **API:** http://localhost:8001/docs
+
+---
+
+## Local Development (without Docker)
+
+**Requirements:** Python 3.11+ and [Poetry](https://python-poetry.org/docs/#installation)
+
 ```bash
-uvicorn main:app --reload
-```
-Or, using Docker:
-```bash
-docker build -t fmea-backend -f Dockerfile.backend .
-docker run -p 8000:8000 fmea-backend
+poetry install              # installs all dependencies from poetry.lock
+poetry run uvicorn backend.main:app --reload --port 8001
 ```
 
-3. Start the frontend:
-- For a quick test, open the file `fmea_app.html` in your browser.
-- Or, to run the React frontend:
-    ```bash
-    cd frontend
-    npm install
-    npm run dev
-    ```
+Frontend (optional React UI):
+```bash
+cd frontend
+npm install
+npm run dev
+```
 
-4. (Optional) Configure environment variables:
-Copy `.env.example` to `.env` and set the required keys.
+---
+
+## Updating Dependencies
+
+When you need to add or update a package:
+
+```bash
+# 1. Edit pyproject.toml (add/change the package version)
+# or run:
+poetry add <package>          # add new package
+poetry update <package>       # update one package
+poetry update                 # update all within version constraints
+
+# 2. Rebuild the Docker image to apply changes
+docker compose build api
+docker compose up
+```
+
+The `poetry.lock` file must always be committed to git — it guarantees that
+every developer and every Docker build uses the exact same dependency versions.
+
+---
 
 
 
 
 ### Project Structure
 ```
-PM_AI/
-
+FMEA_AI/
+├── pyproject.toml                 # Dependency management (Poetry)
+├── poetry.lock                    # Pinned dependency versions — always commit this
+├── requirements.txt               # pip fallback (mirrors pyproject.toml)
+├── docker-compose.yml             # Orchestrates API + DB + frontend
+│
 ├── backend/                       # FastAPI backend application
+│   ├── Dockerfile                 # Single Dockerfile for the API container
 │   ├── main.py                    # FastAPI entry point
-│   ├── requirements.txt           # Backend dependencies
-│   ├── Dockerfile.backend         # Dockerfile for backend
-│   ├── agents/                    # Specialist agent modules
+│   ├── schemas.py                 # Pydantic models
+│   ├── agents/                    # Specialist AI agent modules
 │   └── services/                  # Extraction and indexing services
 │
-├── frontend/                      # (Optional) React frontend (Vite)
+├── frontend/                      # React frontend (Vite)
 │   ├── src/                       # React source code
-│   ├── index.html                 # Main HTML entry
-│   ├── package.json               # Frontend dependencies
-│   └── Dockerfile                 # Dockerfile for frontend
+│   ├── index.html
+│   ├── package.json
+│   └── Dockerfile
 │
-├── fmea_app.html                  # Standalone HTML+CDN demo UI
-│
-├── data/                          # Data and vector stores
-│   ├── sample_documents/          # Example documents
-│   └── vector_store/              # ChromaDB storage
+├── fmea_app.html                  # Standalone HTML+CDN demo UI (no build needed)
 │
 ├── src/                           # Core analytics and utilities
-│   ├── analytics/                 # Quantitative analysis modules
-│   ├── nlp/                       # NLP and risk analysis
-│   ├── preprocessing/             # Data preprocessing
+│   ├── analytics/                 # Monte Carlo, EMV, probability calibration
+│   ├── nlp/                       # NLP, risk analysis, deduplication
+│   ├── preprocessing/             # PDF/Excel FMEA extractors
+│   ├── vector_store/              # ChromaDB manager, embeddings, retriever
+│   └── visualization/             # Ontology builder (Plotly/NetworkX)
+│
+├── data/
+│   ├── sample_documents/          # Example FMEA documents
+│   └── vector_store/              # ChromaDB persistent storage
+│
+├── Books/                         # Reference books for RAG indexing
+├── Standards/                     # FMEA standards documents
+├── tests/                         # pytest test suite
+└── translations/                  # i18n files (en, fr, pt-br)
+```
 
 ### Key Features (MVP v2.0)
 
@@ -117,26 +151,26 @@ AI-Meeting
 
 ### Tech Stack
 
-Core:
+**Core:**
+- Python 3.11+
+- FastAPI (backend REST API + SSE streaming)
+- React 18 (frontend)
+- Docker + Docker Compose (containerization)
+- UTCLLM / OpenAI-compatible API (LLM integration)
 
-Python 3.10+
-FastAPI (backend REST API)
-React (frontend, optional)
-HTML+CDN (standalone demo UI)
-Docker (containerization)
-UTCLLM (UTC Large Language Model integration)
-NLP/ML:
+**NLP / ML:**
+- Sentence Transformers (embeddings)
+- PyMuPDF (PDF extraction)
+- OpenAI client (LLM calls)
 
-LangChain (LLM orchestration)
-Sentence Transformers (embeddings)
-Scikit-learn (future ML models)
+**Data:**
+- ChromaDB (vector store for RAG)
+- Pandas + openpyxl (Excel processing)
 
-Data:
-
-ChromaDB (vector store for RAG)
-Pandas (data manipulation)
-
+**Dev:**
+- Poetry (dependency management)
+- pytest (tests)
 
 ---
 
-**Last Updated:** April 2026  
+**Last Updated:** May 2026
