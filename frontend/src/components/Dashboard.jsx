@@ -75,7 +75,7 @@ function RecordTable({ records }) {
                 {isCritical && (
                   <tr>
                     <td colSpan={totalCols} className={s.criticalBanner}>
-                      ⚠ Exceeds the critical threshold of 36
+                      [!] Exceeds the critical threshold of 36
                     </td>
                   </tr>
                 )}
@@ -181,7 +181,7 @@ export default function Dashboard() {
             <input
             className={s.keyInput}
             type="password"
-            placeholder="🔑  UTC API Key  (sk-)"
+            placeholder="UTC API Key  (sk-)"
             value={apiKey}
             onChange={e => handleApiKey(e.target.value)}
             aria-label="UTC platform API key"
@@ -215,7 +215,7 @@ export default function Dashboard() {
                 hidden
                 onChange={e => e.target.files[0] && handleFile(e.target.files[0])}
               />
-              <div className={s.dropIcon}>{file ? '📄' : '📂'}</div>
+              <div className={s.dropIcon}>{file ? '[doc]' : '[folder]'}</div>
               {file
                 ? <><strong>{file.name}</strong><span className={s.fileSize}>{(file.size / 1024).toFixed(1)} KB</span></>
                 : <><strong>Drop your FMEA file here</strong><span>or click to browse — PDF or Excel</span></>
@@ -231,7 +231,7 @@ export default function Dashboard() {
             >
               {loading
                 ? <><span className={s.spinner} />Extracting…</>
-                : '⚡ Extract FMEA'}
+                : 'Extract FMEA'}
             </button>
           </section>
         )}

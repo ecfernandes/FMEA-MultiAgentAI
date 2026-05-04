@@ -103,18 +103,16 @@ services:
       retries:  5
 
   # --------------------------------------------------------------------------
-  # WEB — nginx serving fmea_app.html
+  # WEB — React + Vite frontend (production build)
   # --------------------------------------------------------------------------
   web:
     build:
-      context:    .                    # project root (where fmea_app.html is)
-      dockerfile: frontend/Dockerfile
+      context:    ./frontend
+      dockerfile: Dockerfile
     container_name: multiagent-fmea-web
     restart: unless-stopped
     ports:
-      - "5174:80"                      # nginx escuta na 80 internamente
-    volumes:
-      - ./fmea_app.html:/usr/share/nginx/html/index.html:ro   # live reload
+      - "5174:80"
     depends_on:
       api:
         condition: service_healthy

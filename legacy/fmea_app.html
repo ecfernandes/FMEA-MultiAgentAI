@@ -98,7 +98,19 @@ function Header({ model, setModel, dark, toggleDark }) {
         AI-Driven FMEA <span className="text-blue-600">5.0</span>
       </h1>
       <div className="flex items-center gap-3">
-        <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-white text-black border border-slate-300 cursor-not-allowed opacity-75">
+        <button
+          disabled
+          className="text-sm px-3 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 text-white font-medium transition-colors cursor-not-allowed opacity-75"
+        >
+          My FMEAs
+        </button>
+        <button
+          disabled
+          className="text-sm px-3 py-2 rounded-lg bg-amber-500 hover:bg-amber-600 text-white font-medium transition-colors cursor-not-allowed opacity-75"
+        >
+          Standards
+        </button>
+        <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-300 dark:border-slate-600 cursor-not-allowed opacity-75">
           System Telemetry
         </button>
         <div className="flex flex-col items-end gap-0.5">
