@@ -71,15 +71,25 @@ def get_client() -> Minio:
 # Bucket initialisation — called from main.py lifespan
 # ---------------------------------------------------------------------------
 
-def ensure_buckets() -> None:
+import logging as _logging
+
+async def ensure_buckets() -> None:
     """
     Creates the required buckets if they do not already exist.
-    Safe to call multiple times (idempotent).
+    Non-fatal: logs a warning if MinIO is unreachable at startup.
     """
-    client = get_client()
-    for bucket in ALL_BUCKETS:
-        if not client.bucket_exists(bucket):
-            client.make_bucket(bucket)
+    _log = _logging.getLogger(__name__)
+    try:
+        client = get_client()
+        for bucket in ALL_BUCKETS:
+            if not client.bucket_exists(bucket):
+                client.make_bucket(bucket)
+        _log.info("MinIO buckets ready: %s", ALL_BUCKETS)
+    except Exception as exc:
+        _log.warning(
+            "MinIO not reachable at startup (%s: %s) — buckets will be created on first use.",
+            type(exc).__name__, exc
+        )
 
 
 # ---------------------------------------------------------------------------

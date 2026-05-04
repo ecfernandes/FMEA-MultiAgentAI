@@ -48,24 +48,12 @@ load_dotenv(dotenv_path=_ENV_FILE, override=True)
 # LIFESPAN — startup / shutdown hooks
 # ============================================================================
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Initialise DB tables and MinIO buckets on startup; dispose engine on shutdown."""
-    from backend.database import create_tables, get_engine
-    from backend.storage import ensure_buckets
-    await create_tables()
-    await ensure_buckets()
-    yield
-    await get_engine().dispose()
-
-
 # ============================================================================
 # APP FACTORY
 # ============================================================================
 
 app = FastAPI(
     title       = "AI-Driven FMEA 5.0 API",
-    lifespan    = lifespan,
     description = (
         "REST backend for multi-agent FMEA analysis.\n\n"
         "**Endpoints**\n"
