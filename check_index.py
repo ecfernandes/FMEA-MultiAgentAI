@@ -1,21 +1,29 @@
-"""Quick script to check why Fatigue and Tolerance aren't indexing."""
-import sys
-sys.path.insert(0, '/app')
+import chromadb
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+from pathlib import Path
 
-from backend.services.book_indexer import index_book, BOOKS_PATH
-import traceback
+# Works both locally (relative path) and inside container (/app prefix)
+for store_path in ["/app/data/vector_store", "data/vector_store"]:
+    if Path(store_path).exists():
+        break
 
-for name in sorted(BOOKS_PATH.glob("*.pdf")):
-    from backend.services.book_indexer import _collection
-    col = _collection()
-    existing = col.get(where={"book_file": name.name})
-    if existing['ids']:
-        print(f"  SKIP (already indexed: {len(existing['ids'])} chunks): {name.name}")
-        continue
-    print(f"  Indexing: {name.name} ...", end='', flush=True)
-    try:
-        n = index_book(name.name, col)
-        print(f" {n} chunks")
-    except Exception as e:
-        print(f" ERROR: {e}")
-        traceback.print_exc()
+client = chromadb.PersistentClient(path=store_path)
+try:
+    col = client.get_or_create_collection(
+        name="fmea_books",
+        embedding_function=DefaultEmbeddingFunction(),
+    )
+    total = col.count()
+    print(f"Total chunks in fmea_books: {total}")
+    if total > 0:
+        sample = col.get(limit=5000, include=["metadatas"])
+        books = {}
+        for m in sample["metadatas"]:
+            b = m.get("book_file", "unknown")
+            books[b] = books.get(b, 0) + 1
+        for b, n in sorted(books.items()):
+            print(f"  {n:>5} chunks  {b}")
+    else:
+        print("Collection exists but is empty — books have not been indexed yet.")
+except Exception as e:
+    print(f"Error: {e}")

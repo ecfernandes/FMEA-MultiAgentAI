@@ -186,6 +186,21 @@ SPECIALIST_MAP: dict = {
             "galling", "scoring",
         ],
     },
+    "Automotive Safety Systems Agent": {
+        "file": "Automotive Safety Handbook (Ulrich Seiffert & Lothar Wech).pdf",
+        "description": (
+            "Automotive restraint systems expert: airbag cushion, inflator, squib, "
+            "pyrotechnic deployment, folding process, SRS module, cover integration, "
+            "FMVSS 208 compliance, ISO 26262 functional safety, deployment pressure "
+            "and timing, fabric seam integrity, vent hole sizing."
+        ),
+        "keywords": [
+            "airbag", "cushion", "inflator", "squib", "deployment", "pyrotechnic",
+            "restraint", "srs", "fold", "folding", "cover", "bag", "module",
+            "fmvss", "iso 26262", "functional safety", "vent hole", "seam",
+            "curtain", "side airbag", "driver airbag", "passenger airbag",
+        ],
+    },
 }
 
 _AGENT_COLORS: dict = {
@@ -202,6 +217,7 @@ _AGENT_COLORS: dict = {
     "Plastic Injection Agent":            "#34d399",
     "Dimensioning and Tolerancing Agent": "#60a5fa",
     "Tribology Agent":                    "#fbbf24",
+    "Automotive Safety Systems Agent":    "#f43f5e",
 }
 
 _FIELD_LABEL: dict = {
@@ -225,17 +241,102 @@ BOOKS_PATH = "Books/"
 # ROUTING
 # ============================================================================
 
-def route_agent(function: str, failure_mode: str) -> str:
-    """Score all specialists against combined input text; return best match name."""
+def _route_by_keywords(function: str, failure_mode: str) -> str:
+    """Keyword scoring fallback — uses whole-word matching to avoid substring false positives."""
     combined = f"{function} {failure_mode}".lower()
     best_agent = next(iter(SPECIALIST_MAP))
     best_score = 0
     for agent_name, spec in SPECIALIST_MAP.items():
-        score = sum(1 for kw in spec["keywords"] if kw in combined)
+        score = sum(
+            1 for kw in spec["keywords"]
+            if re.search(r"\b" + re.escape(kw) + r"\b", combined)
+        )
         if score > best_score:
             best_score = score
             best_agent = agent_name
     return best_agent
+
+
+def _build_router_prompt() -> str:
+    """Build the system prompt for the LLM router listing all available specialists."""
+    lines = [
+        "You are an FMEA specialist routing agent. Your only task is to select",
+        "the single most relevant specialist for the given component function",
+        "and failure mode.",
+        "",
+        "Available specialists:",
+    ]
+    for name, spec in SPECIALIST_MAP.items():
+        # Use first sentence of description as a short label
+        short = spec["description"].split(":")[1].split(".")[0].strip() if ":" in spec["description"] else spec["description"]
+        lines.append(f"- {name}: {short}")
+    lines += [
+        "",
+        "Rules:",
+        "- Reply with ONLY the exact specialist name from the list above",
+        "- Do not add any explanation, punctuation, or extra text",
+        "- If uncertain, choose the specialist whose domain is closest to the physical failure mechanism",
+    ]
+    return "\n".join(lines)
+
+
+_ROUTER_SYSTEM_PROMPT: str = _build_router_prompt()
+
+
+async def _route_by_llm(
+    function: str,
+    failure_mode: str,
+    api_key: str,
+) -> str | None:
+    """
+    Ask the LLM to select the most relevant specialist.
+
+    Returns the agent name if valid, None if the LLM response is not in SPECIALIST_MAP.
+    Falls back gracefully on any network or parse error.
+    """
+    base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
+    model    = os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+
+    try:
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
+                {"role": "user",   "content": f"Function: {function}\nFailure mode: {failure_mode}"},
+            ],
+            temperature=0,
+            max_tokens=20,
+        )
+        raw = response.choices[0].message.content.strip()
+        # Strip any <think>...</think> blocks from reasoning models
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        # Validate — only accept names that actually exist
+        if raw in SPECIALIST_MAP:
+            return raw
+        # Try case-insensitive match as safety net
+        for name in SPECIALIST_MAP:
+            if name.lower() == raw.lower():
+                return name
+        return None
+    except Exception:
+        return None
+
+
+async def route_agent(function: str, failure_mode: str, api_key: str) -> str:
+    """
+    LLM-first router with keyword fallback.
+
+    1. Ask the LLM to classify (temperature=0, max 20 tokens).
+    2. Validate the response against SPECIALIST_MAP.
+    3. If invalid or error, fall back to whole-word keyword scoring.
+
+    Returns the agent name (always a valid key in SPECIALIST_MAP).
+    """
+    agent = await _route_by_llm(function, failure_mode, api_key)
+    if agent is not None:
+        return agent
+    return _route_by_keywords(function, failure_mode)
 
 
 # ============================================================================
@@ -256,7 +357,7 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
     Returns:
         AgentResponse with suggested value, justification and sources.
     """
-    agent_name  = route_agent(request.function, request.failure_mode)
+    agent_name = await route_agent(request.function, request.failure_mode, api_key)
     spec        = SPECIALIST_MAP[agent_name]
     book_file   = spec["file"]
     book_domain = spec["description"]
@@ -278,8 +379,6 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
         "- Every sentence must carry technical content — no padding\n"
         "- Return ONLY the raw JSON object — no markdown fences, no commentary"
     )
-
-    rag_chunks = []
 
     user_prompt = (
         f"Part / component context: {request.context}\n"

@@ -114,6 +114,23 @@ class AISuggestion(Base):
     confidence = Column(Float)
     prompt_context = Column(JSONB)           # snapshot of input sent to LLM
 
+    # ------------------------------------------------------------------
+    # LLM-as-Judge fields (nullable — populated when judge runs)
+    # ------------------------------------------------------------------
+    judge_verdict = Column(String(20))           # "correct" | "partial" | "incorrect"
+    judge_correct_points = Column(JSONB)         # list[str] — technically valid statements
+    judge_incorrect_points = Column(JSONB)       # list[str] — incoherent or hallucinated statements
+    judge_confidence = Column(Float)             # 0.0–1.0 certainty in verdict
+    judge_evaluated_at = Column(DateTime(timezone=True))
+
+    # ------------------------------------------------------------------
+    # Human review fields (nullable — populated when engineer reviews)
+    # ------------------------------------------------------------------
+    human_verdict = Column(String(20))           # "accepted" | "rejected" | "modified"
+    human_notes = Column(Text)                   # free-text observation from the engineer
+    human_reviewed_by = Column(String(255))      # user id or email
+    human_reviewed_at = Column(DateTime(timezone=True))
+
     session = relationship("FMEASession", back_populates="ai_suggestions")
     fmea_record = relationship("FMEARecord", back_populates="ai_suggestions")
     feedback = relationship("SuggestionFeedback", back_populates="suggestion", uselist=False)

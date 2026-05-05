@@ -152,15 +152,21 @@ def index_all_books(books_path: str | None = None) -> dict[str, int]:
     Returns:
         {filename: chunks_added} for each book found.
     """
-    root = Path(books_path) if books_path else BOOKS_PATH
-    col  = _collection()
+    root  = Path(books_path) if books_path else BOOKS_PATH
+    col   = _collection()
+    pdfs  = sorted(root.glob("*.pdf"))
+    total = len(pdfs)
     results: dict[str, int] = {}
-    for pdf in sorted(root.glob("*.pdf")):
+    for idx, pdf in enumerate(pdfs, start=1):
+        print(f"[RAG] ({idx}/{total}) Indexing {pdf.name} ...", flush=True)
         try:
-            results[pdf.name] = index_book(pdf.name, col)
+            n = index_book(pdf.name, col)
+            results[pdf.name] = n
+            print(f"[RAG]   -> {n} chunks added", flush=True)
         except Exception as exc:
-            print(f"[RAG] Skipping {pdf.name}: {exc}")
+            print(f"[RAG]   -> ERROR: {exc}", flush=True)
             results[pdf.name] = 0
+    print(f"[RAG] Done. Total books: {total}", flush=True)
     return results
 
 
