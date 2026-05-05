@@ -187,7 +187,7 @@ SPECIALIST_MAP: dict = {
         ],
     },
     "Automotive Safety Systems Agent": {
-        "file": "Automotive Safety Handbook (Ulrich Seiffert & Lothar Wech).pdf",
+        "file": "Standard-Design And Process Fmea (Failure Mode, Effects And Criticality Analysis).pdf",
         "description": (
             "Automotive restraint systems expert: airbag cushion, inflator, squib, "
             "pyrotechnic deployment, folding process, SRS module, cover integration, "
@@ -283,6 +283,106 @@ def _build_router_prompt() -> str:
 _ROUTER_SYSTEM_PROMPT: str = _build_router_prompt()
 
 
+# ============================================================================
+# LLM-AS-JUDGE
+# ============================================================================
+
+_JUDGE_SYSTEM_PROMPT = (
+    "You are a senior automotive FMEA quality auditor. Your task is to evaluate "
+    "whether an AI-generated FMEA field assessment is technically sound and "
+    "coherent with the component described.\n\n"
+    "Return JSON with exactly four keys:\n"
+    '  "verdict":           "correct" | "partial" | "incorrect"\n'
+    '  "correct_points":    ["list of technically valid statements"]\n'
+    '  "incorrect_points":  ["list of technically invalid statements"]\n'
+    '  "confidence":        float 0.0 to 1.0\n\n'
+    "Verdict criteria:\n"
+    '  "correct"   — all points valid, no inconsistencies\n'
+    '  "partial"   — majority valid but at least one incoherent statement\n'
+    '  "incorrect" — fundamentally incoherent with component or failure mode\n\n'
+    "Reference always applicable: Renault Standard - Design And Process FMEA\n\n"
+    "RULES:\n"
+    "- Evaluate technical coherence, not writing style\n"
+    "- Flag statements contradicting the physical nature of the component\n"
+    "- Flag materials, processes or standards inconsistent with part type\n"
+    "- Return ONLY raw JSON, no markdown fences"
+)
+
+
+async def _judge_response(
+    *,
+    context: str,
+    function: str,
+    failure_mode: str,
+    field_label: str,
+    agent_name: str,
+    suggested_value: Optional[str | int],
+    justification: str,
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> dict:
+    """
+    Call the LLM judge to evaluate the agent's output.
+
+    Returns a dict with keys: verdict, correct_points, incorrect_points, confidence.
+    On any failure returns a safe 'partial' fallback so the response is never blocked
+    due to a judge error.
+    """
+    user_prompt = (
+        f"Component context: {context}\n"
+        f"Item function: {function}\n"
+        f"Failure mode: {failure_mode}\n"
+        f"FMEA field assessed: {field_label}\n"
+        f"Specialist selected: {agent_name}\n"
+        f"AI-generated assessment: {suggested_value}\n"
+        f"Justification provided: {justification}\n"
+        "Reference standard: Renault Standard - Design And Process FMEA\n"
+        "Evaluate technical coherence with the component and failure mode described."
+    )
+
+    _fallback: dict = {
+        "verdict": "partial",
+        "correct_points": [],
+        "incorrect_points": ["Judge failed to evaluate — review manually"],
+        "confidence": 0.0,
+    }
+
+    try:
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=400,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        if raw.endswith("```"):
+            raw = raw[: raw.rfind("```")].strip()
+        if not raw.startswith("{"):
+            m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if m:
+                raw = m.group(0)
+        result = json.loads(raw)
+        if result.get("verdict") not in ("correct", "partial", "incorrect"):
+            return _fallback
+        result.setdefault("correct_points", [])
+        result.setdefault("incorrect_points", [])
+        result.setdefault("confidence", 0.0)
+        return result
+    except Exception:
+        return _fallback
+
+
 async def _route_by_llm(
     function: str,
     failure_mode: str,
@@ -343,21 +443,17 @@ async def route_agent(function: str, failure_mode: str, api_key: str) -> str:
 # ASYNC AGENT CALL
 # ============================================================================
 
-async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
+async def _call_specialist_agent(
+    agent_name: str,
+    request: AgentRequest,
+    api_key: str,
+    base_url: str,
+    model: str,
+) -> tuple[Optional[str | int], str]:
     """
-    Select the best-matching specialist for the request and call the UTC LLM.
-
-    This is the async version of the legacy get_ai_suggestion() function in
-    ai_agents.py — designed for use inside FastAPI async endpoints.
-
-    Args:
-        request:  Validated AgentRequest from the HTTP body.
-        api_key:  UTC platform API key (sk-... format).
-
-    Returns:
-        AgentResponse with suggested value, justification and sources.
+    Call the specialist LLM and return (suggested_value, justification).
+    Extracted so route_and_call can retry without duplicating the call logic.
     """
-    agent_name = await route_agent(request.function, request.failure_mode, api_key)
     spec        = SPECIALIST_MAP[agent_name]
     book_file   = spec["file"]
     book_domain = spec["description"]
@@ -367,10 +463,13 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
     system_prompt = (
         f"You are a senior FMEA engineer. Your domain of expertise: {book_domain}\n"
         f"Reference document: {book_file}\n\n"
-        f'Return a valid JSON object with exactly these two keys:\n'
-        f'  "suggested_value": '
-        + ('"an integer between 1 and 10 — no quotes, no explanation inline"'
-           if is_numeric else '"a concise technical string, maximum 150 characters"')
+        'Return a valid JSON object with exactly these two keys:\n'
+        '  "suggested_value": '
+        + (
+            '"an integer between 1 and 10 — no quotes, no explanation inline"'
+            if is_numeric
+            else '"a concise technical string, maximum 150 characters"'
+          )
         + '\n  "justification":   "3 to 5 sentences of dense engineering reasoning"\n\n'
         "STRICT RULES:\n"
         '- Do NOT write "Based on the book", "According to", "The agent suggests", "As per..."\n'
@@ -386,9 +485,6 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
         f"Failure mode: {request.failure_mode}\n"
         f"\nProvide your expert assessment for the FMEA field: {field_label}"
     )
-
-    base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-    model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
     val: Optional[str | int] = None
     justification = "Agent call failed — check API key and connection."
@@ -406,10 +502,10 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
         )
         raw = response.choices[0].message.content.strip()
 
-        # 1. Strip <think>...</think> blocks (reasoning models: Magistral, Olmo Think, etc.)
+        # Strip <think>...</think> blocks (reasoning models)
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-        # 2. Strip markdown code fences
+        # Strip markdown code fences
         if raw.startswith("```"):
             raw = raw.split("```")[1]
             if raw.startswith("json"):
@@ -418,7 +514,7 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
         if raw.endswith("```"):
             raw = raw[: raw.rfind("```")].strip()
 
-        # 3. Regex fallback: extract first {...} block in case the model added preamble text
+        # Regex fallback: extract first {...} block in case the model added preamble text
         if not raw.startswith("{"):
             m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
             if m:
@@ -444,10 +540,69 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
             f"Error: {exc}"
         )
 
-    return AgentResponse(
+    return val, justification
+
+
+async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
+    """
+    Select the best-matching specialist, call it, then run the LLM-as-Judge.
+
+    Judge verdict actions:
+      correct   — deliver to engineer as-is
+      partial   — deliver with warning; incorrect_points surface to the user for review
+      incorrect — retry once with the same specialist, then deliver as partial
+
+    Args:
+        request:  Validated AgentRequest from the HTTP body.
+        api_key:  UTC platform API key (sk-... format).
+
+    Returns:
+        AgentResponse with suggested value, justification, sources and judge fields.
+    """
+    agent_name  = await route_agent(request.function, request.failure_mode, api_key)
+    spec        = SPECIALIST_MAP[agent_name]
+    book_file   = spec["file"]
+    field_label = _FIELD_LABEL.get(request.field, request.field.replace("_", " ").title())
+
+    base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
+    model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+
+    val, justification = await _call_specialist_agent(
+        agent_name, request, api_key, base_url, model
+    )
+
+    judge = await _judge_response(
+        context         = request.context,
+        function        = request.function,
+        failure_mode    = request.failure_mode,
+        field_label     = field_label,
         agent_name      = agent_name,
-        agent_color     = _AGENT_COLORS.get(agent_name, "#6b7280"),
         suggested_value = val,
         justification   = justification,
-        sources         = [f"📖 {book_file}"],
+        api_key         = api_key,
+        model           = model,
+        base_url        = base_url,
+    )
+
+    if judge["verdict"] == "incorrect":
+        # Retry once — reclassify as partial so the response is never silently blocked
+        val, justification = await _call_specialist_agent(
+            agent_name, request, api_key, base_url, model
+        )
+        judge["verdict"] = "partial"
+        if not judge["incorrect_points"]:
+            judge["incorrect_points"] = [
+                "Initial response was flagged as incorrect by the judge — this is a retry"
+            ]
+
+    return AgentResponse(
+        agent_name             = agent_name,
+        agent_color            = _AGENT_COLORS.get(agent_name, "#6b7280"),
+        suggested_value        = val,
+        justification          = justification,
+        sources                = [book_file, "Renault Standard - Design And Process FMEA"],
+        judge_verdict          = judge["verdict"],
+        judge_correct_points   = judge.get("correct_points", []),
+        judge_incorrect_points = judge.get("incorrect_points", []),
+        judge_confidence       = judge.get("confidence"),
     )

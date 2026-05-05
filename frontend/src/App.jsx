@@ -643,7 +643,7 @@ function AIModal({ modal, onApply, onClose }) {
               <div className="mb-5">
                 <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold border"
                   style={{ background: `${data.agent_color}18`, color: data.agent_color, borderColor: `${data.agent_color}44` }}>
-                  🤖 {data.agent_name}
+                  {data.agent_name}
                 </span>
               </div>
               <div className="grid grid-cols-2 gap-4 mb-5">
@@ -665,12 +665,9 @@ function AIModal({ modal, onApply, onClose }) {
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Sources & References</p>
                 <div className="flex flex-wrap gap-2">
-                  {(data.sources || []).length
-                    ? data.sources.map((s, i) => (
-                        <span key={i} className="inline-flex items-center bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400">{s}</span>
-                      ))
-                    : <span className="text-xs text-slate-400">No sources provided</span>
-                  }
+                  {(data.sources || []).map((s, i) => (
+                      <span key={i} className="inline-flex items-center bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400">{s}</span>
+                    ))}
                 </div>
               </div>
             </>

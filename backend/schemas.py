@@ -156,7 +156,22 @@ class AgentResponse(BaseModel):
     justification: str = Field(..., description="Dense engineering rationale (3-5 sentences)")
     sources: List[str] = Field(
         default_factory=list,
-        description="Reference book / source used by the agent",
+        description="Reference books / standards used by the agent",
+    )
+
+    # LLM-as-Judge evaluation fields (None when judge call fails)
+    judge_verdict: Optional[str] = Field(
+        None,
+        description="'correct' | 'partial' | 'incorrect' (incorrect is retried server-side)",
+    )
+    judge_correct_points: Optional[List[str]] = Field(
+        None, description="Technically valid statements identified by the judge"
+    )
+    judge_incorrect_points: Optional[List[str]] = Field(
+        None, description="Technically incoherent statements identified by the judge"
+    )
+    judge_confidence: Optional[float] = Field(
+        None, description="Judge confidence score 0.0 to 1.0"
     )
 
 
