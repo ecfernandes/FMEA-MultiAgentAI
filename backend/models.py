@@ -103,7 +103,7 @@ class AISuggestion(Base):
     __tablename__ = "ai_suggestions"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    session_id = Column(UUID(as_uuid=True), ForeignKey("fmea_sessions.id", ondelete="CASCADE"), nullable=False)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("fmea_sessions.id", ondelete="CASCADE"), nullable=True)
     fmea_record_id = Column(UUID(as_uuid=True), ForeignKey("fmea_records.id", ondelete="CASCADE"))
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     agent_name = Column(String(100))         # e.g. severity_agent, occurrence_agent

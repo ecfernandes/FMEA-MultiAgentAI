@@ -29,6 +29,101 @@ function groupByFunction(records) {
   return map
 }
 
+function svgLines(text, maxChars) {
+  if (!text) return ['—']
+  if (text.length <= maxChars) return [text]
+  const words = text.split(' ')
+  const lines = []
+  let cur = ''
+  for (const w of words) {
+    const next = cur ? `${cur} ${w}` : w
+    if (next.length <= maxChars) {
+      cur = next
+    } else {
+      if (cur) lines.push(cur)
+      cur = w.length > maxChars ? w.slice(0, maxChars - 1) + '…' : w
+    }
+  }
+  if (cur) lines.push(cur)
+  return lines.slice(0, 3)
+}
+
+function RadialOrgChart({ productName, functions, activeFunc, onSelect }) {
+  const n       = functions.length
+  const rectW   = 170
+  const rectH   = 50
+  const centerR = 68
+  const orbitR  = Math.max(220, Math.ceil((n * (rectW + 24)) / (2 * Math.PI)))
+  const pad     = rectW / 2 + 24
+  const W       = (orbitR + pad) * 2
+  const H       = (orbitR + pad) * 2
+  const cx      = W / 2
+  const cy      = H / 2
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} className={s.radialSvg} aria-label="Function map">
+      {functions.map((_, i) => {
+        const angle = (2 * Math.PI * i) / n - Math.PI / 2
+        const px = cx + orbitR * Math.cos(angle)
+        const py = cy + orbitR * Math.sin(angle)
+        const sx = cx + centerR * Math.cos(angle)
+        const sy = cy + centerR * Math.sin(angle)
+        return (
+          <line key={i} x1={sx} y1={sy} x2={px} y2={py}
+            stroke="rgba(74,158,255,0.22)" strokeWidth="1.5" strokeDasharray="4 3" />
+        )
+      })}
+
+      <circle cx={cx} cy={cy} r={centerR}
+        fill="rgba(74,158,255,0.10)" stroke="rgba(74,158,255,0.55)" strokeWidth="2" />
+
+      {(() => {
+        const lines  = svgLines(productName || 'Product', 13)
+        const lineH  = 16
+        const startY = cy - ((lines.length - 1) * lineH) / 2
+        return lines.map((l, i) => (
+          <text key={i} x={cx} y={startY + i * lineH}
+            textAnchor="middle" dominantBaseline="middle"
+            fill="#4a9eff" fontSize="12" fontWeight="700">{l}</text>
+        ))
+      })()}
+
+      {functions.map((fn, i) => {
+        const angle    = (2 * Math.PI * i) / n - Math.PI / 2
+        const px       = cx + orbitR * Math.cos(angle)
+        const py       = cy + orbitR * Math.sin(angle)
+        const isActive = i === activeFunc
+        const lines    = svgLines(fn, 21)
+        const lineH    = 14
+        const startY   = py - ((lines.length - 1) * lineH) / 2
+        return (
+          <g key={i} onClick={() => onSelect(i)} style={{ cursor: 'pointer' }}>
+            <rect
+              x={px - rectW / 2} y={py - rectH / 2}
+              width={rectW} height={rectH} rx={8}
+              fill={isActive ? 'rgba(74,158,255,0.18)' : 'rgba(22,27,40,0.92)'}
+              stroke={isActive ? '#4a9eff' : 'rgba(74,158,255,0.28)'}
+              strokeWidth={isActive ? 2 : 1}
+            />
+            <text fontSize="11" fontWeight={isActive ? '700' : '500'}
+              fill={isActive ? '#4a9eff' : '#cbd5e1'}>
+              {lines.map((l, li) => (
+                <tspan key={li} x={px} y={startY + li * lineH}
+                  textAnchor="middle" dominantBaseline="middle">{l}</tspan>
+              ))}
+            </text>
+            <text x={px - rectW / 2 + 7} y={py - rectH / 2 + 7}
+              fontSize="8" fontWeight="700" dominantBaseline="hanging"
+              fill={isActive ? '#4a9eff' : 'rgba(74,158,255,0.55)'}>
+              F{i + 1}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
+  )
+}
+
 // ── Sub-components ────────────────────────────────────────────────────────────
 
 function Badge({ value, cls, empty = '—' }) {
@@ -107,6 +202,7 @@ export default function Dashboard() {
   const [error, setError]         = useState(null)
   const [dragOver, setDragOver]   = useState(false)
   const [activeFunc, setActiveFunc] = useState(0)
+  const [viewMode, setViewMode]   = useState('list')
   const fileInputRef = useRef()
 
   const handleApiKey = (v) => {
@@ -263,22 +359,54 @@ export default function Dashboard() {
               </div>
             </section>
 
-            {/* Function pills navigation */}
+            {/* Function navigation — toggle + list or radial map */}
             {fnList.length > 1 && (
-              <div className={s.pills}>
-                {fnList.map((fn, i) => (
-                  <button
-                    key={i}
-                    className={`${s.pill} ${i === activeFunc ? s.pillActive : ''}`}
-                    onClick={() => setActiveFunc(i)}
-                    title={fn}
-                  >
-                    <span className={s.pillIdx}>F{i + 1}</span>
-                    <span className={s.pillLabel}>{fn.length > 45 ? fn.slice(0, 44) + '…' : fn}</span>
-                    <span className={s.pillCount}>{fnGroups.get(fn).length}</span>
-                  </button>
-                ))}
-              </div>
+              <>
+                <div className={s.viewToggleBar}>
+                  <div className={s.viewToggle}>
+                    <button
+                      className={`${s.viewToggleBtn} ${viewMode === 'list' ? s.viewToggleActive : ''}`}
+                      onClick={() => setViewMode('list')}
+                    >
+                      List
+                    </button>
+                    <button
+                      className={`${s.viewToggleBtn} ${viewMode === 'map' ? s.viewToggleActive : ''}`}
+                      onClick={() => setViewMode('map')}
+                    >
+                      Map
+                    </button>
+                  </div>
+                </div>
+
+                {viewMode === 'list' && (
+                  <div className={s.pills}>
+                    {fnList.map((fn, i) => (
+                      <button
+                        key={i}
+                        className={`${s.pill} ${i === activeFunc ? s.pillActive : ''}`}
+                        onClick={() => setActiveFunc(i)}
+                        title={fn}
+                      >
+                        <span className={s.pillIdx}>F{i + 1}</span>
+                        <span className={s.pillLabel}>{fn.length > 45 ? fn.slice(0, 44) + '…' : fn}</span>
+                        <span className={s.pillCount}>{fnGroups.get(fn).length}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {viewMode === 'map' && (
+                  <div className={s.radialWrap}>
+                    <RadialOrgChart
+                      productName={result.document.part_name}
+                      functions={fnList}
+                      activeFunc={activeFunc}
+                      onSelect={setActiveFunc}
+                    />
+                  </div>
+                )}
+              </>
             )}
 
             {/* Active function header */}

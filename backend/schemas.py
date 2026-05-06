@@ -263,6 +263,60 @@ class SessionListResponse(BaseModel):
 
 
 # ============================================================================
+# SESSION PERSISTENCE — save extraction + AI suggestions
+# ============================================================================
+
+class SaveExtractionRequest(BaseModel):
+    """Request body for POST /sessions/from-extraction."""
+    part_name: str
+    supplier: Optional[str] = "Unknown"
+    source_file: str
+    records: List[dict] = Field(default_factory=list)
+    language: Optional[str] = "en"
+    industry: Optional[str] = None
+    user_id: Optional[str] = None
+
+
+class SaveExtractionResponse(BaseModel):
+    """Response from POST /sessions/from-extraction."""
+    session_id: str
+    records_saved: int
+
+
+class SaveSuggestionRequest(BaseModel):
+    """Request body for POST /sessions/{id}/suggestions."""
+    field: str
+    function: str
+    failure_mode: str
+    current_value: Optional[str] = None
+    suggested_value: Optional[str] = None
+    justification: Optional[str] = None
+    agent_name: Optional[str] = None
+    agent_color: Optional[str] = None
+    sources: Optional[List[str]] = None
+    judge_verdict: Optional[str] = None
+    judge_correct_points: Optional[List[str]] = None
+    judge_incorrect_points: Optional[List[str]] = None
+    judge_confidence: Optional[float] = None
+    human_verdict: str = Field(..., description="'accepted' | 'rejected'")
+    model_name: Optional[str] = None
+
+
+class SaveSuggestionResponse(BaseModel):
+    suggestion_id: str
+    human_verdict: str
+
+
+class SessionRecordsResponse(BaseModel):
+    """Response from GET /sessions/{id}/records."""
+    session_id: str
+    part_name: Optional[str] = None
+    supplier: Optional[str] = None
+    source_file: Optional[str] = None
+    records: List[dict] = Field(default_factory=list)
+
+
+# ============================================================================
 # HEALTH CHECK
 # ============================================================================
 

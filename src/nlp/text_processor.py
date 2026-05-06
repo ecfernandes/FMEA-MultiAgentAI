@@ -378,24 +378,24 @@ def remove_special_noise(text: str) -> str:
 
 
 def remove_artifacts(text: str,
-                    remove_signatures: bool = True,
-                    remove_disclaimers: bool = True,
-                    remove_headers_footers: bool = True,
-                    remove_page_numbers: bool = True,
-                    remove_boilerplate: bool = True,
-                    remove_noise: bool = True) -> str:
+                    do_signatures: bool = True,
+                    do_disclaimers: bool = True,
+                    do_headers_footers: bool = True,
+                    do_page_numbers: bool = True,
+                    do_boilerplate: bool = True,
+                    do_noise: bool = True) -> str:
     """
     Comprehensive artifact removal with configurable options.
     Applies all cleaning steps in optimal order.
     
     Args:
         text: Raw input text
-        remove_signatures: Remove email signatures
-        remove_disclaimers: Remove legal disclaimers
-        remove_headers_footers: Remove document headers/footers
-        remove_page_numbers: Remove page numbers
-        remove_boilerplate: Remove repeated boilerplate text
-        remove_noise: Remove special characters and noise
+        do_signatures: Remove email signatures
+        do_disclaimers: Remove legal disclaimers
+        do_headers_footers: Remove document headers/footers
+        do_page_numbers: Remove page numbers
+        do_boilerplate: Remove repeated boilerplate text
+        do_noise: Remove special characters and noise
         
     Returns:
         Cleaned text with artifacts removed
@@ -406,22 +406,22 @@ def remove_artifacts(text: str,
     cleaned = text
     
     # Order matters - remove in this sequence for best results
-    if remove_signatures:
+    if do_signatures:
         cleaned = remove_email_signatures(cleaned)
     
-    if remove_disclaimers:
+    if do_disclaimers:
         cleaned = remove_disclaimers(cleaned)
     
-    if remove_headers_footers:
+    if do_headers_footers:
         cleaned = remove_headers_footers(cleaned)
     
-    if remove_page_numbers:
+    if do_page_numbers:
         cleaned = remove_page_numbers(cleaned)
     
-    if remove_boilerplate:
+    if do_boilerplate:
         cleaned = remove_boilerplate(cleaned)
     
-    if remove_noise:
+    if do_noise:
         cleaned = remove_special_noise(cleaned)
     
     # Final normalization

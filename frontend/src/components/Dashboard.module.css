@@ -238,6 +238,50 @@
 .metaLabel { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-secondary); font-weight: 600; margin-bottom: 0.1rem; }
 .metaDivider { width: 1px; height: 36px; background: var(--border); margin: 0 0.25rem; }
 
+/* ── View toggle ───────────────────────────────────────────────────────── */
+.viewToggleBar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.75rem;
+}
+.viewToggle {
+  display: flex;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 2px;
+}
+.viewToggleBtn {
+  padding: 0.28rem 0.9rem;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.03em;
+}
+.viewToggleBtn:hover { color: var(--text-primary); }
+.viewToggleActive { background: var(--accent); color: #fff !important; }
+
+/* ── Radial map ─────────────────────────────────────────────────────────── */
+.radialWrap {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  margin-bottom: 1.25rem;
+}
+.radialSvg {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 560px;
+}
+
 /* ── Function pills ────────────────────────────────────────────────────── */
 .pills {
   display: flex;

@@ -27,7 +27,8 @@ from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import select, func as sa_func, String as sa_String
+import sqlalchemy as sa
 
 from backend.schemas import (
     AgentRequest,
@@ -38,13 +39,18 @@ from backend.schemas import (
     MissingFailuresRequest,
     MissingFailuresResponse,
     MissingFailureSuggestion,
+    SaveExtractionRequest,
+    SaveExtractionResponse,
+    SaveSuggestionRequest,
+    SaveSuggestionResponse,
     SessionCreate,
     SessionListResponse,
+    SessionRecordsResponse,
     SessionResponse,
     SessionUpdate,
 )
 from backend.database import get_db
-from backend.models import FMEASession
+from backend.models import FMEASession, FMEARecord, AISuggestion
 from backend.services.extractor import extract_file
 from backend.agents.specialist_agents import route_and_call
 
@@ -350,12 +356,16 @@ async def extract_document_stream(
         "Mechatronics, Materials, ...) based on keyword scoring against the "
         "combined function + failure_mode text.\n\n"
         "The selected agent returns a `suggested_value` and a dense "
-        "`justification` grounded in its reference engineering book."
+        "`justification` grounded in its reference engineering book.\n\n"
+        "**Pinned responses**: if a row in `ai_suggestions` has `human_verdict = 'pinned'` "
+        "and matches the incoming `field` + `failure_mode` + `function`, it is returned "
+        "directly without calling the LLM."
     ),
 )
 async def analyze_field(
     request   : AgentRequest,
     x_api_key : str | None = Header(default=None, description="UTC platform API key"),
+    db        : AsyncSession = Depends(get_db),
 ):
     """
     Route an FMEA field to the most appropriate specialist agent and return
@@ -369,6 +379,47 @@ async def analyze_field(
     if not request.field.strip():
         raise HTTPException(status_code=422, detail="'field' must not be empty.")
 
+    # ── 1. Check for a pinned (hardcoded) suggestion in the DB ──────────────
+    try:
+        from backend.models import AISuggestion
+
+        stmt = (
+            select(AISuggestion)
+            .where(
+                AISuggestion.human_verdict == "pinned",
+                AISuggestion.field         == request.field,
+                sa_func.lower(
+                    sa_func.cast(AISuggestion.prompt_context["failure_mode"].astext, sa_String)
+                ) == request.failure_mode.strip().lower(),
+                sa_func.lower(
+                    sa_func.cast(AISuggestion.prompt_context["function"].astext, sa_String)
+                ) == request.function.strip().lower(),
+            )
+            .limit(1)
+        )
+        row: AISuggestion | None = (await db.execute(stmt)).scalars().first()
+
+        if row is not None:
+            sources: list[str] = []
+            if row.prompt_context and "sources" in row.prompt_context:
+                sources = row.prompt_context["sources"]
+            return AgentResponse(
+                agent_name             = row.agent_name or "Pinned Response",
+                agent_color            = row.prompt_context.get("agent_color", "#6b7280")
+                                         if row.prompt_context else "#6b7280",
+                suggested_value        = row.suggested_value,
+                justification          = row.justification or "",
+                sources                = sources,
+                judge_verdict          = row.judge_verdict,
+                judge_correct_points   = row.judge_correct_points or [],
+                judge_incorrect_points = row.judge_incorrect_points or [],
+                judge_confidence       = row.judge_confidence,
+            )
+    except Exception:
+        # If DB is unavailable or query fails, fall through to LLM
+        pass
+
+    # ── 2. Normal LLM path ───────────────────────────────────────────────────
     try:
         result = await route_and_call(request, api_key)
     except Exception as exc:
@@ -751,4 +802,176 @@ async def delete_session(
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
 
     await db.delete(session)
+
+
+# ============================================================================
+# SESSIONS — save extraction + records
+# ============================================================================
+
+@app.post(
+    "/sessions/from-extraction",
+    response_model=SaveExtractionResponse,
+    status_code=201,
+    tags=["Sessions"],
+    summary="Create session and persist all extracted FMEA records",
+)
+async def save_extraction(
+    body: SaveExtractionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SaveExtractionResponse:
+    """
+    Creates a FMEASession and saves all extracted FMEA records to PostgreSQL.
+    Called automatically by the frontend after a successful /extract.
+    """
+    session = FMEASession(
+        part_name=body.part_name,
+        supplier=body.supplier,
+        language=body.language or "en",
+        industry=body.industry,
+        user_id=body.user_id,
+        status="in_progress",
+    )
+    db.add(session)
+    await db.flush()
+
+    CORE = {
+        "component", "function", "item_function", "failure_mode", "effect", "cause",
+        "severity", "occurrence", "detection", "rpn", "recommended_action",
+        "source_file", "sheet_name", "row_number",
+    }
+    for r in body.records:
+        try:
+            sev = int(r["severity"]) if r.get("severity") not in (None, "") else None
+        except (ValueError, TypeError):
+            sev = None
+        try:
+            occ = int(r["occurrence"]) if r.get("occurrence") not in (None, "") else None
+        except (ValueError, TypeError):
+            occ = None
+        try:
+            det = int(r["detection"]) if r.get("detection") not in (None, "") else None
+        except (ValueError, TypeError):
+            det = None
+        rpn = (sev * occ * det) if (sev and occ and det) else None
+        extra = {k: v for k, v in r.items() if k not in CORE}
+        record = FMEARecord(
+            session_id=session.id,
+            component=r.get("component"),
+            failure_mode=r.get("failure_mode"),
+            effect=r.get("effect"),
+            cause=r.get("cause"),
+            severity=sev,
+            occurrence=occ,
+            detection=det,
+            rpn=rpn,
+            recommended_action=r.get("recommended_action"),
+            extra_fields=extra if extra else None,
+        )
+        db.add(record)
+
+    await db.commit()
+    await db.refresh(session)
+    return SaveExtractionResponse(
+        session_id=str(session.id),
+        records_saved=len(body.records),
+    )
+
+
+@app.post(
+    "/sessions/{session_id}/suggestions",
+    response_model=SaveSuggestionResponse,
+    status_code=201,
+    tags=["Sessions"],
+    summary="Save an AI suggestion with engineer verdict (accepted or rejected)",
+)
+async def save_suggestion(
+    session_id: str,
+    body: SaveSuggestionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SaveSuggestionResponse:
+    """
+    Persists one AI suggestion row to ai_suggestions.
+    Called when the engineer clicks Apply (accepted) or Dismiss (rejected).
+    """
+    suggestion = AISuggestion(
+        session_id=session_id,
+        agent_name=body.agent_name,
+        field=body.field,
+        model_name=body.model_name or "unknown",
+        suggested_value=str(body.suggested_value) if body.suggested_value is not None else None,
+        justification=body.justification,
+        prompt_context={
+            "field": body.field,
+            "function": body.function,
+            "failure_mode": body.failure_mode,
+            "current_value": body.current_value,
+            "agent_color": body.agent_color,
+            "sources": body.sources or [],
+        },
+        judge_verdict=body.judge_verdict,
+        judge_correct_points=body.judge_correct_points,
+        judge_incorrect_points=body.judge_incorrect_points,
+        judge_confidence=body.judge_confidence,
+        human_verdict=body.human_verdict,
+    )
+    db.add(suggestion)
+    await db.commit()
+    await db.refresh(suggestion)
+    return SaveSuggestionResponse(
+        suggestion_id=str(suggestion.id),
+        human_verdict=body.human_verdict,
+    )
+
+
+@app.get(
+    "/sessions/{session_id}/records",
+    response_model=SessionRecordsResponse,
+    tags=["Sessions"],
+    summary="Get all FMEA records saved for a session",
+)
+async def get_session_records(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionRecordsResponse:
+    """
+    Returns all FMEARecord rows for a given session, reconstructed as plain dicts
+    suitable for the frontend document format.
+    """
+    sess_result = await db.execute(
+        select(FMEASession).where(FMEASession.id == session_id)
+    )
+    session = sess_result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+    rec_result = await db.execute(
+        select(FMEARecord)
+        .where(FMEARecord.session_id == session_id)
+        .order_by(FMEARecord.created_at)
+    )
+    records = rec_result.scalars().all()
+
+    def _to_dict(r: FMEARecord) -> dict:
+        d = {
+            "component": r.component,
+            "failure_mode": r.failure_mode,
+            "effect": r.effect,
+            "cause": r.cause,
+            "severity": r.severity,
+            "occurrence": r.occurrence,
+            "detection": r.detection,
+            "rpn": r.rpn,
+            "recommended_action": r.recommended_action,
+        }
+        if r.extra_fields:
+            d.update(r.extra_fields)
+        return d
+
+    return SessionRecordsResponse(
+        session_id=session_id,
+        part_name=session.part_name,
+        supplier=session.supplier,
+        source_file=session.part_name,
+        records=[_to_dict(r) for r in records],
+    )
 

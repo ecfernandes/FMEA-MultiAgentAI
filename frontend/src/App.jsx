@@ -40,7 +40,7 @@ function groupByFn(records) {
 }
 
 // ── Header ───────────────────────────────────────────────────────────────────
-function Header({ model, setModel, dark, toggleDark }) {
+function Header({ model, setModel, dark, toggleDark, onMyFmeas }) {
   const weakModel = MODELS.find(m => m.value === model)?.weak
   return (
     <header className="flex items-center justify-between mb-8">
@@ -48,7 +48,7 @@ function Header({ model, setModel, dark, toggleDark }) {
         AI-Driven FMEA <span className="text-blue-600">5.0</span>
       </h1>
       <div className="flex items-center gap-3">
-        <button disabled className="text-sm px-3 py-2 rounded-lg bg-blue-500 text-white font-medium cursor-not-allowed opacity-75">
+        <button onClick={onMyFmeas} className="text-sm px-3 py-2 rounded-lg bg-blue-500 text-white font-medium hover:bg-blue-600 transition-colors">
           My FMEAs
         </button>
         <button disabled className="text-sm px-3 py-2 rounded-lg bg-amber-500 text-white font-medium cursor-not-allowed opacity-75">
@@ -607,7 +607,46 @@ function ResultsSection({ open, onToggle, doc, onReset, onEdit, onAI, model, onA
 }
 
 // ── AIModal ───────────────────────────────────────────────────────────────────
-function AIModal({ modal, onApply, onClose }) {
+function PencilBtn({ onClick, active }) {
+  return (
+    <button
+      onClick={onClick}
+      title={active ? 'Done editing' : 'Edit'}
+      className={`p-1 rounded-md transition-colors ${
+        active
+          ? 'text-blue-600 bg-blue-100 dark:bg-blue-900/40'
+          : 'text-slate-400 hover:text-blue-500 hover:bg-slate-100 dark:hover:bg-slate-700'
+      }`}
+    >
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      </svg>
+    </button>
+  )
+}
+
+function AIModal({ modal, onApply, onDismiss, onClose }) {
+  const [editedValue,         setEditedValue]         = useState('')
+  const [editedJustification, setEditedJustification] = useState('')
+  const [editedSources,       setEditedSources]       = useState([])
+  const [editingValue,        setEditingValue]        = useState(false)
+  const [editingJustif,       setEditingJustif]       = useState(false)
+  const [editingSources,      setEditingSources]      = useState(false)
+  const [newSource,           setNewSource]           = useState('')
+
+  useEffect(() => {
+    if (modal.data) {
+      setEditedValue(String(modal.data.suggested_value ?? ''))
+      setEditedJustification(modal.data.justification || '')
+      setEditedSources([...(modal.data.sources || [])])
+      setEditingValue(false)
+      setEditingJustif(false)
+      setEditingSources(false)
+      setNewSource('')
+    }
+  }, [modal.data])
+
   useEffect(() => {
     const h = e => { if (e.key === 'Escape') onClose() }
     document.addEventListener('keydown', h)
@@ -616,12 +655,20 @@ function AIModal({ modal, onApply, onClose }) {
 
   if (!modal.open) return null
   const { field, functionName, failureMode, currentValue, loading, data, error } = modal
+  const isEditing = editingValue || editingJustif || editingSources
+
+  const addSource = () => {
+    if (newSource.trim()) {
+      setEditedSources(prev => [...prev, newSource.trim()])
+      setNewSource('')
+    }
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={e => { if (e.target === e.currentTarget) onClose() }}>
-      <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700">
-        <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100 dark:border-slate-700">
+      <div className={`bg-white dark:bg-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700 ${isEditing ? 'flex flex-col max-h-[90vh]' : ''}`}>
+        <div className={`flex items-start justify-between px-6 py-5 border-b border-slate-100 dark:border-slate-700 ${isEditing ? 'shrink-0' : ''}`}>
           <div>
             <h2 className="text-lg font-bold text-slate-800 dark:text-white">Knowledge Engineering Audit</h2>
             {functionName && <p className="text-xs text-slate-500 mt-0.5">Function: <span className="font-semibold">{functionName}</span></p>}
@@ -630,7 +677,8 @@ function AIModal({ modal, onApply, onClose }) {
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none mt-0.5">×</button>
         </div>
-        <div className="px-6 py-5">
+
+        <div className={`px-6 py-5 ${isEditing ? 'overflow-y-auto flex-1' : ''}`}>
           {loading && (
             <div className="flex items-center justify-center gap-3 py-12 text-slate-400">
               <span className="w-6 h-6 border-2 border-slate-200 border-t-blue-600 rounded-full animate-spin-slow inline-block" />
@@ -643,40 +691,116 @@ function AIModal({ modal, onApply, onClose }) {
               <div className="mb-5">
                 <span className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-semibold border"
                   style={{ background: `${data.agent_color}18`, color: data.agent_color, borderColor: `${data.agent_color}44` }}>
+                  <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 8V4H8"/>
+                    <rect width="16" height="12" x="4" y="8" rx="2"/>
+                    <path d="M2 14h2"/>
+                    <path d="M20 14h2"/>
+                    <path d="M15 13v2"/>
+                    <path d="M9 13v2"/>
+                  </svg>
                   {data.agent_name}
                 </span>
               </div>
+
+              {/* Current value + AI Suggested Value */}
               <div className="grid grid-cols-2 gap-4 mb-5">
                 <div className="bg-slate-50 dark:bg-slate-700/50 rounded-xl p-4 border border-slate-200 dark:border-slate-600">
                   <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-3">Current Value</p>
-                  <p className="text-base font-semibold text-slate-600 dark:text-slate-300 break-all">{String(currentValue ?? '—')}</p>
+                  <p className="text-base font-semibold text-slate-600 dark:text-slate-300 break-words">{String(currentValue ?? '—')}</p>
                 </div>
                 <div className="bg-blue-50 dark:bg-blue-900/20 rounded-xl p-4 border border-blue-200 dark:border-blue-700">
-                  <p className="text-xs font-bold uppercase tracking-wide text-blue-500 mb-3">AI Suggested Value</p>
-                  <p className="text-base font-semibold text-blue-600 dark:text-blue-400 break-all">{String(data.suggested_value ?? '—')}</p>
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-blue-500">AI Suggested Value</p>
+                    <PencilBtn onClick={() => setEditingValue(v => !v)} active={editingValue} />
+                  </div>
+                  {editingValue ? (
+                    <textarea
+                      rows={3}
+                      value={editedValue}
+                      onChange={e => setEditedValue(e.target.value)}
+                      className="w-full text-sm font-semibold text-blue-600 dark:text-blue-400 bg-white dark:bg-slate-800 border border-blue-300 dark:border-blue-600 rounded-lg px-3 py-2 resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
+                    />
+                  ) : (
+                    <p className="text-base font-semibold text-blue-600 dark:text-blue-400 break-words">{editedValue || '—'}</p>
+                  )}
                 </div>
               </div>
+
+              {/* AI Engineering Justification */}
               <div className="mb-5">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Engineering Justification</p>
-                <div className="bg-slate-50 dark:bg-slate-700/40 rounded-xl p-4 text-sm leading-relaxed text-slate-700 dark:text-slate-300 border border-slate-100 dark:border-slate-600">
-                  {data.justification}
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">AI Engineering Justification</p>
+                  <PencilBtn onClick={() => setEditingJustif(v => !v)} active={editingJustif} />
                 </div>
+                {editingJustif ? (
+                  <textarea
+                    rows={7}
+                    value={editedJustification}
+                    onChange={e => setEditedJustification(e.target.value)}
+                    className="w-full text-sm leading-relaxed text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-500 rounded-xl px-4 py-3 resize-y focus:outline-none focus:ring-2 focus:ring-blue-400"
+                  />
+                ) : (
+                  <div className="bg-slate-50 dark:bg-slate-700/40 rounded-xl p-4 text-sm leading-relaxed text-slate-700 dark:text-slate-300 border border-slate-100 dark:border-slate-600">
+                    {editedJustification}
+                  </div>
+                )}
               </div>
+
+              {/* Sources & References */}
               <div>
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-400 mb-2">Sources & References</p>
-                <div className="flex flex-wrap gap-2">
-                  {(data.sources || []).map((s, i) => (
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-400">Sources & References</p>
+                  <PencilBtn onClick={() => { setEditingSources(v => !v); setNewSource('') }} active={editingSources} />
+                </div>
+                {editingSources ? (
+                  <div className="space-y-2">
+                    {editedSources.map((s, i) => (
+                      <div key={i} className="flex items-center gap-2">
+                        <input
+                          value={s}
+                          onChange={e => setEditedSources(prev => prev.map((x, j) => j === i ? e.target.value : x))}
+                          className="flex-1 text-xs bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-500 rounded-lg px-3 py-1.5 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                        />
+                        <button
+                          onClick={() => setEditedSources(prev => prev.filter((_, j) => j !== i))}
+                          className="text-red-400 hover:text-red-600 px-1 text-lg leading-none font-bold" title="Remove"
+                        >×</button>
+                      </div>
+                    ))}
+                    <div className="flex items-center gap-2 mt-2">
+                      <input
+                        value={newSource}
+                        onChange={e => setNewSource(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSource() } }}
+                        placeholder="Add new source..."
+                        className="flex-1 text-xs bg-white dark:bg-slate-700 border border-blue-300 dark:border-blue-600 rounded-lg px-3 py-1.5 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-400"
+                      />
+                      <button
+                        onClick={addSource}
+                        className="text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                      >Add</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap gap-2">
+                    {editedSources.map((s, i) => (
                       <span key={i} className="inline-flex items-center bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400">{s}</span>
                     ))}
-                </div>
+                  </div>
+                )}
               </div>
             </>
           )}
         </div>
+
         {!loading && !error && data && (
-          <div className="flex gap-3 px-6 py-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 rounded-b-2xl">
-            <button onClick={() => onApply(String(data.suggested_value ?? ''))} className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors">Apply Suggestion</button>
-            <button onClick={onClose} className="px-6 py-2.5 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl transition-colors">Dismiss</button>
+          <div className={`flex gap-3 px-6 py-4 border-t border-slate-100 dark:border-slate-700 bg-slate-50/60 dark:bg-slate-800/60 rounded-b-2xl ${isEditing ? 'shrink-0' : ''}`}>
+            <button
+              onClick={() => onApply(editedValue, editedJustification, editedSources)}
+              className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl transition-colors"
+            >Apply Suggestion</button>
+            <button onClick={onDismiss} className="px-6 py-2.5 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl transition-colors">Dismiss</button>
             <button disabled className="px-5 py-2.5 bg-orange-500 text-white font-semibold rounded-xl opacity-75 cursor-not-allowed">Interactive AI Meeting</button>
           </div>
         )}
@@ -690,6 +814,9 @@ export default function App() {
   const [dark,  setDark]  = useState(false)
   const [model, setModel] = useState('RedHatAI/Qwen3.6-35B-A3B-NVFP4')
   const [doc,   setDoc]   = useState(null)
+  const [sessionId, setSessionId] = useState(null)
+  const [myFmeasOpen, setMyFmeasOpen] = useState(false)
+  const [myFmeas, setMyFmeas] = useState([])
 
   const [openAbout, setOpenAbout] = useState(false)
   const [open1A,    setOpen1A]    = useState(true)
@@ -703,7 +830,29 @@ export default function App() {
     document.body.className = dark ? 'bg-slate-900 text-slate-100 transition-colors' : 'bg-slate-50 text-slate-900 transition-colors'
   }, [dark])
 
-  const handleExtracted = newDoc => { setDoc(newDoc); setOpen1A(false); setOpen1B(false); setOpen2(true) }
+  const handleExtracted = async newDoc => {
+    setDoc(newDoc)
+    setOpen1A(false)
+    setOpen1B(false)
+    setOpen2(true)
+    try {
+      const res = await fetch(`${API}/sessions/from-extraction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          part_name: newDoc.part_name || 'Unknown',
+          supplier: newDoc.supplier || 'Unknown',
+          source_file: newDoc.source_file || newDoc.part_name || 'upload',
+          records: newDoc.records || [],
+          language: newDoc.language || 'en',
+        }),
+      })
+      if (res.ok) {
+        const d = await res.json()
+        setSessionId(d.session_id)
+      }
+    } catch (_) {}
+  }
   const handleReset     = ()     => { setDoc(null); setOpen1A(true); setOpen2(false) }
 
   function handleEdit(gi, field, value) {
@@ -735,9 +884,74 @@ export default function App() {
     } catch(e) { setModal(m => ({ ...m, loading: false, error: e.message })) }
   }
 
-  const applyAI = value => {
+  const applyAI = async (value, justification, sources) => {
     if (modal.recordIdx !== null) handleEdit(modal.recordIdx, modal.field, value)
     setModal(m => ({ ...m, open: false }))
+    if (sessionId && modal.data) {
+      try {
+        await fetch(`${API}/sessions/${sessionId}/suggestions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            field: modal.field,
+            function: modal.functionName || '',
+            failure_mode: modal.failureMode || '',
+            current_value: modal.currentValue != null ? String(modal.currentValue) : null,
+            suggested_value: value,
+            justification: justification || modal.data.justification || '',
+            agent_name: modal.data.agent_name || '',
+            agent_color: modal.data.agent_color || '',
+            sources: sources || modal.data.sources || [],
+            judge_verdict: modal.data.judge_verdict || null,
+            judge_correct_points: modal.data.judge_correct_points || null,
+            judge_incorrect_points: modal.data.judge_incorrect_points || null,
+            judge_confidence: modal.data.judge_confidence ?? null,
+            human_verdict: 'accepted',
+            model_name: model,
+          }),
+        })
+      } catch (_) {}
+    }
+  }
+
+  const dismissAI = async () => {
+    if (sessionId && modal.data) {
+      try {
+        await fetch(`${API}/sessions/${sessionId}/suggestions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            field: modal.field,
+            function: modal.functionName || '',
+            failure_mode: modal.failureMode || '',
+            current_value: modal.currentValue != null ? String(modal.currentValue) : null,
+            suggested_value: String(modal.data.suggested_value ?? ''),
+            justification: modal.data.justification || '',
+            agent_name: modal.data.agent_name || '',
+            agent_color: modal.data.agent_color || '',
+            sources: modal.data.sources || [],
+            judge_verdict: modal.data.judge_verdict || null,
+            judge_correct_points: modal.data.judge_correct_points || null,
+            judge_incorrect_points: modal.data.judge_incorrect_points || null,
+            judge_confidence: modal.data.judge_confidence ?? null,
+            human_verdict: 'rejected',
+            model_name: model,
+          }),
+        })
+      } catch (_) {}
+    }
+    setModal(m => ({ ...m, open: false }))
+  }
+
+  const openMyFmeas = async () => {
+    try {
+      const res = await fetch(`${API}/sessions`)
+      if (res.ok) {
+        const d = await res.json()
+        setMyFmeas(d.sessions || [])
+      }
+    } catch (_) {}
+    setMyFmeasOpen(true)
   }
 
   const handleAddSuggestedFailure = suggestion => {
@@ -755,7 +969,7 @@ export default function App() {
   return (
     <div className="min-h-screen transition-colors duration-300">
       <div className="max-w-screen-xl mx-auto px-6 py-8">
-        <Header model={model} setModel={setModel} dark={dark} toggleDark={() => setDark(d => !d)} />
+        <Header model={model} setModel={setModel} dark={dark} toggleDark={() => setDark(d => !d)} onMyFmeas={openMyFmeas} />
 
         <Accordion title="About" open={openAbout} onToggle={() => setOpenAbout(o => !o)}>
           <ul className="space-y-2.5 text-sm">
@@ -777,7 +991,17 @@ export default function App() {
         </div>
 
         <ResultsSection open={open2} onToggle={() => setOpen2(o => !o)} doc={doc} onReset={handleReset} onEdit={handleEdit} onAI={handleAI} model={model} onAddSuggestedFailure={handleAddSuggestedFailure} />
-        <AIModal modal={modal} onApply={applyAI} onClose={() => setModal(m => ({ ...m, open: false }))} />
+        <AIModal modal={modal} onApply={applyAI} onDismiss={dismissAI} onClose={() => setModal(m => ({ ...m, open: false }))} />
+        {myFmeasOpen && (
+          <MyFmeasModal
+            sessions={myFmeas}
+            onClose={() => setMyFmeasOpen(false)}
+            onLoadRecords={loaded => {
+              setDoc({ part_name: loaded.part_name, supplier: loaded.supplier, records: loaded.records })
+              setOpen2(true)
+            }}
+          />
+        )}
       </div>
     </div>
   )
