@@ -6,37 +6,64 @@
 
 ---
 
+
 ## Quick Start (Docker — recommended)
 
+
 ```bash
-cp .env.example .env        # fill in UTCLLM_API_KEY and other vars
+cp .env.example .env        # fill in UTCLLM_API_KEY and all required variables
+# NUNCA versionar .env (já está no .gitignore)
 docker compose up --build   # first run: builds and starts everything
 docker compose up           # subsequent runs (no rebuild needed)
 ```
 
+
 The app is available at:
 - **UI:** http://localhost:5174 (React + Vite, served by nginx)
-- **API:** http://localhost:8001/docs
+- **API docs:** http://localhost:8001/docs (Swagger UI)
+- **API base:** http://localhost:8001
 
 ---
 
+
 ## Local Development (without Docker)
 
-**Requirements:** Python 3.11+ and [Poetry](https://python-poetry.org/docs/#installation)
+
+**Requirements:** Python 3.11+, [Poetry](https://python-poetry.org/docs/#installation)
+
 
 ```bash
 poetry install              # installs all dependencies from poetry.lock
 poetry run uvicorn backend.main:app --reload --port 8001
 ```
 
+
 Frontend (optional React UI):
+
+
+> **Requirements:** Node.js 18+ must be installed and available in PATH.
+
 ```bash
 cd frontend
-npm install
-npm run dev
+npm ci          # installs exact versions from package-lock.json
+npm run dev     # starts Vite dev server at http://localhost:5173
 ```
 
+
+**Frontend: local Vite vs Docker**
+
+| Mode | URL | When to use |
+|------|-----|-------------|
+| `npm run dev` (local) | http://localhost:5173 | Development — changes appear instantly, no rebuild needed |
+| Docker (`web` container) | http://localhost:5174 | Production-like — serves compiled `dist/` via nginx |
+
+
+When developing, stop the `web` Docker container and use `npm run dev` instead.
+The `api` backend container stays running in both cases.
+After finishing, restart the `web` container: `docker compose up web`.
+
 ---
+
 
 ## Updating Dependencies
 
@@ -54,6 +81,7 @@ docker compose build api
 docker compose up
 ```
 
+
 The `poetry.lock` file must always be committed to git — it guarantees that
 every developer and every Docker build uses the exact same dependency versions.
 
@@ -61,6 +89,41 @@ every developer and every Docker build uses the exact same dependency versions.
 
 
 
+
+---
+
+## API Endpoints (Sessions & AI Agent)
+
+### Session Endpoints (CRUD)
+
+- `POST   /sessions`           — Cria uma nova sessão de análise
+- `GET    /sessions`           — Lista todas as sessões
+- `GET    /sessions/{id}`      — Detalhes de uma sessão
+- `PUT    /sessions/{id}`      — Atualiza dados de uma sessão
+- `DELETE /sessions/{id}`      — Remove uma sessão
+
+Todos os endpoints usam Pydantic v2 para validação e resposta.
+
+### AI Agent Endpoint
+
+- `POST /agent` — Executa análise com modelo LLM selecionável (UTC LLM, OpenAI-compatible)
+    - Parâmetro `model` permite escolher o modelo (ex: qwen3527b-no-think, Mistral, Magistral, etc.)
+
+### Documentação Interativa
+
+Use o Swagger UI em http://localhost:8001/docs para testar todos os endpoints.
+
+---
+
+### Backend Details
+
+- FastAPI (async, produção-ready)
+- SQLAlchemy async + Alembic (PostgreSQL)
+- Pydantic v2 (schemas)
+- Dockerfile otimizado: torch CPU-only, sem dependências CUDA
+- .env nunca deve ser versionado (contém chaves e segredos)
+
+---
 
 ### Project Structure
 ```
