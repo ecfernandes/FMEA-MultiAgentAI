@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir poetry==2.1.3
 # If pyproject.toml/poetry.lock don't change, this layer is reused.
 COPY pyproject.toml poetry.lock ./
 
+# Pre-install CPU-only torch so Poetry/sentence-transformers does not pull CUDA packages
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+
 # Install production deps from the lock file directly into the system Python.
 # --only main   → skip [dev] group (pytest etc.)
 # --no-root     → don't try to install the project itself as a package

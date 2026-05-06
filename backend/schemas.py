@@ -219,6 +219,50 @@ class MissingFailuresResponse(BaseModel):
 
 
 # ============================================================================
+# SESSIONS
+# ============================================================================
+
+class SessionCreate(BaseModel):
+    """Request body for POST /sessions."""
+    part_name: Optional[str] = Field(None, description="Part or component name")
+    supplier: Optional[str] = Field(None, description="Supplier company name")
+    language: Optional[str] = Field("en", description="Interface language: en | fr | pt-br")
+    industry: Optional[str] = Field(None, description="Industry sector (e.g. automotive)")
+    user_id: Optional[str] = Field(None, description="User identifier (email or id)")
+
+
+class SessionResponse(BaseModel):
+    """A single FMEA session record."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str = Field(..., description="Session UUID")
+    created_at: str = Field(..., description="ISO-8601 creation timestamp")
+    updated_at: Optional[str] = Field(None, description="ISO-8601 last-updated timestamp")
+    user_id: Optional[str] = None
+    part_name: Optional[str] = None
+    supplier: Optional[str] = None
+    status: str = Field("draft", description="draft | in_progress | completed")
+    language: str = Field("en")
+    industry: Optional[str] = None
+
+
+class SessionUpdate(BaseModel):
+    """Request body for PUT /sessions/{session_id}."""
+    part_name: Optional[str] = None
+    supplier: Optional[str] = None
+    language: Optional[str] = None
+    industry: Optional[str] = None
+    user_id: Optional[str] = None
+    status: Optional[str] = Field(None, description="draft | in_progress | completed")
+
+
+class SessionListResponse(BaseModel):
+    """Response from GET /sessions."""
+    total: int
+    sessions: List[SessionResponse]
+
+
+# ============================================================================
 # HEALTH CHECK
 # ============================================================================
 

@@ -23,9 +23,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, func as sa_func
 
 from backend.schemas import (
     AgentRequest,
@@ -36,7 +38,13 @@ from backend.schemas import (
     MissingFailuresRequest,
     MissingFailuresResponse,
     MissingFailureSuggestion,
+    SessionCreate,
+    SessionListResponse,
+    SessionResponse,
+    SessionUpdate,
 )
+from backend.database import get_db
+from backend.models import FMEASession
 from backend.services.extractor import extract_file
 from backend.agents.specialist_agents import route_and_call
 
@@ -585,4 +593,162 @@ async def suggest_missing_failures(
             status_code=500,
             detail=f"Missing-failures analysis failed: {exc}",
         )
+
+
+# ============================================================================
+# SESSIONS — persistence endpoints
+# ============================================================================
+
+def _session_to_schema(s: FMEASession) -> SessionResponse:
+    """Convert ORM FMEASession to SessionResponse Pydantic model."""
+    return SessionResponse(
+        id         = str(s.id),
+        created_at = s.created_at.isoformat() if s.created_at else "",
+        updated_at = s.updated_at.isoformat() if s.updated_at else None,
+        user_id    = s.user_id,
+        part_name  = s.part_name,
+        supplier   = s.supplier,
+        status     = s.status or "draft",
+        language   = s.language or "en",
+        industry   = s.industry,
+    )
+
+
+@app.post(
+    "/sessions",
+    response_model = SessionResponse,
+    status_code    = 201,
+    tags           = ["Sessions"],
+    summary        = "Create a new FMEA session",
+)
+async def create_session(
+    body: SessionCreate,
+    db  : AsyncSession = Depends(get_db),
+) -> SessionResponse:
+    """
+    Create a new FMEA analysis session and persist it to PostgreSQL.
+    Returns the created session including its auto-generated UUID.
+    """
+    session = FMEASession(
+        part_name = body.part_name,
+        supplier  = body.supplier,
+        language  = body.language or "en",
+        industry  = body.industry,
+        user_id   = body.user_id,
+        status    = "draft",
+    )
+    db.add(session)
+    await db.flush()       # assigns session.id without committing yet
+    await db.refresh(session)
+    return _session_to_schema(session)
+
+
+@app.get(
+    "/sessions",
+    response_model = SessionListResponse,
+    tags           = ["Sessions"],
+    summary        = "List all FMEA sessions",
+)
+async def list_sessions(
+    db    : AsyncSession = Depends(get_db),
+    limit : int = 50,
+    offset: int = 0,
+) -> SessionListResponse:
+    """
+    Returns all FMEA sessions ordered by creation date (newest first).
+    Supports pagination via `limit` and `offset` query parameters.
+    """
+    count_result = await db.execute(select(sa_func.count()).select_from(FMEASession))
+    total = count_result.scalar_one()
+
+    result = await db.execute(
+        select(FMEASession)
+        .order_by(FMEASession.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    sessions = result.scalars().all()
+
+    return SessionListResponse(
+        total    = total,
+        sessions = [_session_to_schema(s) for s in sessions],
+    )
+
+
+@app.get(
+    "/sessions/{session_id}",
+    response_model = SessionResponse,
+    tags           = ["Sessions"],
+    summary        = "Get a specific FMEA session by ID",
+)
+async def get_session(
+    session_id: str,
+    db        : AsyncSession = Depends(get_db),
+) -> SessionResponse:
+    """
+    Returns a single FMEA session by its UUID.
+    Raises 404 if not found.
+    """
+    result = await db.execute(
+        select(FMEASession).where(FMEASession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    return _session_to_schema(session)
+
+
+@app.put(
+    "/sessions/{session_id}",
+    response_model = SessionResponse,
+    tags           = ["Sessions"],
+    summary        = "Update an existing FMEA session",
+)
+async def update_session(
+    session_id: str,
+    body      : SessionUpdate,
+    db        : AsyncSession = Depends(get_db),
+) -> SessionResponse:
+    """
+    Partially updates a session. Only fields provided in the body are changed.
+    Raises 404 if not found.
+    """
+    result = await db.execute(
+        select(FMEASession).where(FMEASession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(session, field, value)
+
+    await db.flush()
+    await db.refresh(session)
+    return _session_to_schema(session)
+
+
+@app.delete(
+    "/sessions/{session_id}",
+    status_code = 204,
+    tags        = ["Sessions"],
+    summary     = "Delete an FMEA session",
+)
+async def delete_session(
+    session_id: str,
+    db        : AsyncSession = Depends(get_db),
+) -> None:
+    """
+    Permanently deletes a session by UUID.
+    Raises 404 if not found. Returns 204 No Content on success.
+    """
+    result = await db.execute(
+        select(FMEASession).where(FMEASession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+    await db.delete(session)
 
