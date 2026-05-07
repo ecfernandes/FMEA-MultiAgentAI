@@ -363,10 +363,10 @@ function EditableCell({ value, gi, field, onEdit, onAI, isSOD, isCritical = fals
 }
 
 // ── FmeaTable ─────────────────────────────────────────────────────────────────
-function FmeaTable({ records, docRecords, colOrder, onEdit, onAI }) {
+function FmeaTable({ records, docRecords, colOrder, onEdit, onAI, onDelete }) {
   if (!records.length) return <p className="text-center text-slate-400 text-sm py-4">No records for this function.</p>
 
-  const SKIP_KEYS = new Set(['function','item_function','component_function','fonction','component','source_file','sheet_name','row_number'])
+  const SKIP_KEYS = new Set(['function','item_function','component_function','fonction','component','source_file','sheet_name','row_number','_aiEdited','_aiNew'])
   const SOD_SET   = new Set(['severity','occurrence','detection'])
   const allKeys   = colOrder.length > 0
     ? [...new Set([...colOrder, ...records.flatMap(r => Object.keys(r))])]
@@ -401,6 +401,7 @@ function FmeaTable({ records, docRecords, colOrder, onEdit, onAI }) {
             {allCols.map(k => (
               <th key={k} className={`px-3 py-2.5 text-xs font-bold uppercase tracking-wide text-slate-400 whitespace-nowrap ${SOD_SET.has(k) || k === 'rpn' ? 'text-center' : 'text-left'}`}>{toLabel(k)}</th>
             ))}
+            <th className="px-2 py-2.5 w-8" />
           </tr>
         </thead>
         <tbody>
@@ -426,6 +427,20 @@ function FmeaTable({ records, docRecords, colOrder, onEdit, onAI }) {
                     )
                     return <EditableCell key={k} value={r[k]} gi={gi} field={k} onEdit={onEdit} onAI={onAI} isSOD={SOD_SET.has(k)} isCritical={isCritical && k === 'severity'} />
                   })}
+                  <td className="px-2 py-2 align-middle">
+                    <button
+                      onClick={() => onDelete(gi)}
+                      title="Delete row"
+                      className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md text-slate-300 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/30"
+                    >
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="3 6 5 6 21 6"/>
+                        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                        <path d="M10 11v6"/><path d="M14 11v6"/>
+                        <path d="M9 6V4h6v2"/>
+                      </svg>
+                    </button>
+                  </td>
                 </tr>
               </Fragment>
             )
@@ -491,16 +506,25 @@ function SuggestMissingPanel({ doc, model, onAddFailure }) {
                   {result.suggestions.length} suggestion{result.suggestions.length !== 1 ? 's' : ''}
                 </span>
               </div>
-              {result.suggestions.map((s, i) => (
+              {result.suggestions.map((s, i) => {
+                const normalize = x => (x || '').trim().toLowerCase()
+                const alreadyAdded = (doc.records || []).some(r => normalize(r.failure_mode) === normalize(s.failure_mode))
+                return (
                 <div key={i} className="border border-amber-200 dark:border-amber-700 rounded-xl p-4 mb-3 bg-amber-50/50 dark:bg-amber-900/10">
                   <div className="flex items-start justify-between gap-3 mb-3">
                     <div>
                       <span className="text-xs font-bold uppercase tracking-wide text-amber-500 mr-1.5">Function:</span>
                       <span className="text-sm font-semibold text-slate-700 dark:text-slate-200">{s.function}</span>
                     </div>
-                    <button onClick={() => onAddFailure(s)} className="shrink-0 text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors">
-                      + Add to FMEA
-                    </button>
+                    {alreadyAdded ? (
+                      <span className="shrink-0 text-xs px-3 py-1.5 bg-slate-200 dark:bg-slate-700 text-slate-500 dark:text-slate-400 rounded-lg font-semibold">
+                        Already in FMEA
+                      </span>
+                    ) : (
+                      <button onClick={() => onAddFailure(s)} className="shrink-0 text-xs px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition-colors">
+                        + Add to FMEA
+                      </button>
+                    )}
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm mb-2">
                     {[['Failure Mode',s.failure_mode],['Effect',s.effect],['Cause',s.cause]].map(([lbl,val]) => (
@@ -516,7 +540,8 @@ function SuggestMissingPanel({ doc, model, onAddFailure }) {
                     </div>
                   )}
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
           <button onClick={reset} className="mt-2 w-full py-2 text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors">↺ Run new analysis</button>
@@ -527,9 +552,9 @@ function SuggestMissingPanel({ doc, model, onAddFailure }) {
 }
 
 // ── ResultsSection ────────────────────────────────────────────────────────────
-function ResultsSection({ open, onToggle, doc, onReset, onEdit, onAI, model, onAddSuggestedFailure }) {
+function ResultsSection({ open, onToggle, doc, onReset, onEdit, onDelete, onAI, model, onAddSuggestedFailure, onShowStatus }) {
   const [activeFn, setActiveFn] = useState(0)
-  useEffect(() => { setActiveFn(0) }, [doc])
+  useEffect(() => { setActiveFn(0) }, [doc?.source_file, doc?.part_name])
 
   if (!doc) return (
     <Accordion title="Step 2 — FMEA Analysis Results" open={open} onToggle={onToggle}>
@@ -570,6 +595,7 @@ function ResultsSection({ open, onToggle, doc, onReset, onEdit, onAI, model, onA
         </div>
         <div className="flex items-center gap-2">
           <button onClick={onReset} className="text-sm border border-slate-300 dark:border-slate-600 px-3 py-1.5 rounded-lg hover:border-blue-500 hover:text-blue-600 dark:text-slate-300 transition-colors">← New Document</button>
+          <button onClick={onShowStatus} className="text-sm px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-800 text-white border border-slate-700 transition-colors">Failure Status</button>
           <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-blue-500 text-white border border-blue-500 cursor-not-allowed opacity-75">FMEA Dashboards</button>
           <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-green-600 text-white border border-green-600 cursor-not-allowed opacity-75">FMEA Report</button>
         </div>
@@ -600,7 +626,7 @@ function ResultsSection({ open, onToggle, doc, onReset, onEdit, onAI, model, onA
         <span className="text-xs text-slate-400">{fnMap.get(fnList[activeFn]).length} failure mode{fnMap.get(fnList[activeFn]).length !== 1 ? 's' : ''}</span>
       </div>
 
-      <FmeaTable records={fnMap.get(fnList[activeFn])} docRecords={doc.records} colOrder={doc._columns || []} onEdit={onEdit} onAI={onAI} />
+      <FmeaTable records={fnMap.get(fnList[activeFn])} docRecords={doc.records} colOrder={doc._columns || []} onEdit={onEdit} onAI={onAI} onDelete={onDelete} />
       <SuggestMissingPanel doc={doc} model={model} onAddFailure={onAddSuggestedFailure} />
     </Accordion>
   )
@@ -809,6 +835,158 @@ function AIModal({ modal, onApply, onDismiss, onClose }) {
   )
 }
 
+// ── FailureStatusModal ────────────────────────────────────────────────────────
+function failureColor(r) {
+  if (r._aiNew)     return { fill: '#fee2e2', stroke: '#ef4444', text: '#b91c1c', label: 'New (AI)' }
+  if (r._aiEdited)  return { fill: '#dcfce7', stroke: '#22c55e', text: '#15803d', label: 'Edited by AI' }
+  return              { fill: '#fef3c7', stroke: '#f59e0b', text: '#92400e', label: 'Original' }
+}
+
+function FailureStatusModal({ doc, onClose }) {
+  const [view, setView] = useState('radial') // 'radial' | 'list'
+
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [onClose])
+
+  if (!doc) return null
+  const records = doc.records || []
+
+  // ── Radial layout ────────────────────────────────────────────────────────
+  const W = 860, H = 560, CX = W / 2, CY = H / 2, CR = 56
+  const RW = 160, RH = 48, GAP = 14
+  const count = records.length
+  // radius of orbit: enough so rectangles don't overlap
+  const orbitR = Math.max(180, Math.min(240, count * 22))
+
+  const nodes = records.map((r, i) => {
+    const angle = (2 * Math.PI * i) / count - Math.PI / 2
+    return {
+      x: CX + orbitR * Math.cos(angle),
+      y: CY + orbitR * Math.sin(angle),
+      r,
+      label: (r.failure_mode || r.component || `Row ${i + 1}`).slice(0, 28),
+      col: failureColor(r),
+    }
+  })
+
+  const LEGEND = [
+    { fill: '#dcfce7', stroke: '#22c55e', text: '#15803d', label: 'Original + edited by AI' },
+    { fill: '#fef3c7', stroke: '#f59e0b', text: '#92400e', label: 'Original, no AI edit' },
+    { fill: '#fee2e2', stroke: '#ef4444', text: '#b91c1c', label: 'New, created by AI' },
+  ]
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-6xl shadow-2xl border border-slate-200 dark:border-slate-700 flex flex-col h-[90vh]">
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-700 shrink-0">
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 dark:text-white">Failure Status Overview</h2>
+            <p className="text-sm text-slate-400 mt-0.5">{doc.part_name} — {records.length} failure modes</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-slate-200 dark:border-slate-600 overflow-hidden">
+              <button
+                onClick={() => setView('radial')}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${view === 'radial' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50'}`}
+              >Radial diagram</button>
+              <button
+                onClick={() => setView('list')}
+                className={`px-4 py-2 text-sm font-medium transition-colors ${view === 'list' ? 'bg-blue-600 text-white' : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50'}`}
+              >List</button>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none">x</button>
+          </div>
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-6 px-6 py-3 bg-slate-50 dark:bg-slate-700/30 border-b border-slate-100 dark:border-slate-700 shrink-0">
+          {LEGEND.map(l => (
+            <span key={l.label} className="flex items-center gap-2 text-sm font-semibold" style={{ color: l.text }}>
+              <span className="w-4 h-4 rounded border" style={{ background: l.fill, borderColor: l.stroke }} />
+              {l.label}
+            </span>
+          ))}
+        </div>
+
+        {/* Body */}
+        <div className={`flex-1 min-h-0 p-4 ${view === 'list' ? 'overflow-y-auto' : 'overflow-hidden flex flex-col'}`}>
+          {records.length === 0 && (
+            <p className="text-center text-slate-400 py-16 text-sm">No failure modes to display.</p>
+          )}
+
+          {records.length > 0 && view === 'radial' && (
+            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ flex: 1, minHeight: 0, display: 'block' }}>
+              {/* Lines from center to each node */}
+              {nodes.map((n, i) => (
+                <line key={i}
+                  x1={CX} y1={CY} x2={n.x} y2={n.y}
+                  stroke={n.col.stroke} strokeWidth="1.5" strokeDasharray="5 3" opacity="0.6"
+                />
+              ))}
+
+              {/* Center circle */}
+              <circle cx={CX} cy={CY} r={CR} fill="#dbeafe" stroke="#3b82f6" strokeWidth="2" />
+              <foreignObject x={CX - CR + 4} y={CY - CR + 4} width={(CR - 4) * 2} height={(CR - 4) * 2}>
+                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 13, fontWeight: 700, color: '#1d4ed8', lineHeight: 1.2, padding: 2 }}>
+                  {(doc.part_name || 'Product').slice(0, 24)}
+                </div>
+              </foreignObject>
+
+              {/* Failure mode rectangles */}
+              {nodes.map((n, i) => (
+                <g key={i}>
+                  <rect
+                    x={n.x - RW / 2} y={n.y - RH / 2}
+                    width={RW} height={RH} rx="6"
+                    fill={n.col.fill} stroke={n.col.stroke} strokeWidth="1.8"
+                  />
+                  <foreignObject x={n.x - RW / 2 + 4} y={n.y - RH / 2 + 4} width={RW - 8} height={RH - 8}>
+                    <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center', fontSize: 12, fontWeight: 600, color: n.col.text, lineHeight: 1.25, overflow: 'hidden' }}>
+                      {n.label}
+                    </div>
+                  </foreignObject>
+                </g>
+              ))}
+            </svg>
+          )}
+
+          {records.length > 0 && view === 'list' && (
+            <div className="space-y-2">
+              {records.map((r, i) => {
+                const col = failureColor(r)
+                return (
+                  <div key={i} className="flex items-center gap-3 rounded-xl border px-4 py-3"
+                    style={{ borderColor: col.stroke, background: col.fill }}>
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: col.stroke }} />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold truncate" style={{ color: col.text }}>
+                        {r.failure_mode || r.component || `Row ${i + 1}`}
+                      </p>
+                      <p className="text-xs text-slate-500 truncate mt-0.5">
+                        {r.function || r.component || ''}{r.effect ? ` — ${r.effect}` : ''}
+                      </p>
+                    </div>
+                    <span className="text-xs font-medium px-2 py-0.5 rounded-full border shrink-0"
+                      style={{ color: col.text, borderColor: col.stroke, background: 'white' }}>
+                      {col.label}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [dark,  setDark]  = useState(false)
@@ -817,6 +995,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState(null)
   const [myFmeasOpen, setMyFmeasOpen] = useState(false)
   const [myFmeas, setMyFmeas] = useState([])
+  const [statusOpen, setStatusOpen] = useState(false)
 
   const [openAbout, setOpenAbout] = useState(false)
   const [open1A,    setOpen1A]    = useState(true)
@@ -885,7 +1064,22 @@ export default function App() {
   }
 
   const applyAI = async (value, justification, sources) => {
-    if (modal.recordIdx !== null) handleEdit(modal.recordIdx, modal.field, value)
+    if (modal.recordIdx !== null) {
+      const gi = modal.recordIdx
+      const field = modal.field
+      setDoc(prev => ({
+        ...prev,
+        records: prev.records.map((r, i) => {
+          if (i !== gi) return r
+          const updated = { ...r, [field]: value, _aiEdited: true }
+          if (['severity', 'occurrence', 'detection'].includes(field)) {
+            const s = +updated.severity, o = +updated.occurrence, d = +updated.detection
+            updated.rpn = (s && o && d) ? s * o * d : null
+          }
+          return updated
+        })
+      }))
+    }
     setModal(m => ({ ...m, open: false }))
     if (sessionId && modal.data) {
       try {
@@ -954,7 +1148,16 @@ export default function App() {
     setMyFmeasOpen(true)
   }
 
+  const handleDelete = gi => {
+    setDoc(prev => ({ ...prev, records: prev.records.filter((_, i) => i !== gi) }))
+  }
+
   const handleAddSuggestedFailure = suggestion => {
+    const normalize = s => (s || '').trim().toLowerCase()
+    const alreadyExists = doc.records.some(
+      r => normalize(r.failure_mode) === normalize(suggestion.failure_mode)
+    )
+    if (alreadyExists) return
     const existing  = doc.records.find(r => (r.function || r.component || '') === suggestion.function)
     const component = existing ? (existing.component || '') : ''
     setDoc(prev => ({ ...prev, records: [...prev.records, {
@@ -963,6 +1166,7 @@ export default function App() {
       severity: null, occurrence: null, detection: null, rpn: null,
       current_controls_prevention: '', current_controls_detection: '', recommended_action: '',
       source_file: 'AI suggestion',
+      _aiNew: true,
     }]}))
   }
 
@@ -990,8 +1194,9 @@ export default function App() {
           <div className="flex-1"><NewFmeaSection open={open1B} onToggle={() => setOpen1B(o => !o)} onCreated={handleExtracted} /></div>
         </div>
 
-        <ResultsSection open={open2} onToggle={() => setOpen2(o => !o)} doc={doc} onReset={handleReset} onEdit={handleEdit} onAI={handleAI} model={model} onAddSuggestedFailure={handleAddSuggestedFailure} />
+        <ResultsSection open={open2} onToggle={() => setOpen2(o => !o)} doc={doc} onReset={handleReset} onEdit={handleEdit} onDelete={handleDelete} onAI={handleAI} model={model} onAddSuggestedFailure={handleAddSuggestedFailure} onShowStatus={() => setStatusOpen(true)} />
         <AIModal modal={modal} onApply={applyAI} onDismiss={dismissAI} onClose={() => setModal(m => ({ ...m, open: false }))} />
+        {statusOpen && <FailureStatusModal doc={doc} onClose={() => setStatusOpen(false)} />}
         {myFmeasOpen && (
           <MyFmeasModal
             sessions={myFmeas}
