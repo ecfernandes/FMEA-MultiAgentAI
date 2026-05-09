@@ -39,6 +39,13 @@ function groupByFn(records) {
   return m
 }
 
+function fmtDate(iso) {
+  if (!iso) return 'Unknown date'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return iso
+  return date.toLocaleString()
+}
+
 // ── Header ───────────────────────────────────────────────────────────────────
 function Header({ model, setModel, dark, toggleDark, onMyFmeas }) {
   const weakModel = MODELS.find(m => m.value === model)?.weak
@@ -152,7 +159,7 @@ function UploadSection({ open, onToggle, model, onExtracted }) {
             let evt; try { evt = JSON.parse(line.slice(6)) } catch { continue }
             if (evt.type === 'start')  { setProgress({ page: 0, total: evt.total_pages, records: 0 }) }
             else if (evt.type === 'page')   { setProgress({ page: evt.page, total: evt.total_pages, records: evt.total_records }) }
-            else if (evt.type === 'done')   { if (evt.columns) evt.document._columns = evt.columns; onExtracted(evt.document); clearTimeout(timerId); setLoad(false); setProgress(null); return }
+            else if (evt.type === 'done')   { if (evt.columns) evt.document._columns = evt.columns; onExtracted(evt.document, file); clearTimeout(timerId); setLoad(false); setProgress(null); return }
             else if (evt.type === 'error')  { throw new Error(evt.message) }
           }
         }
@@ -162,7 +169,7 @@ function UploadSection({ open, onToggle, model, onExtracted }) {
         })
         if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`) }
         const data = await res.json()
-        onExtracted(data.document)
+        onExtracted(data.document, file)
       }
     } catch (e) {
       if (e.name === 'AbortError') setError(`Timeout: extraction took more than ${isPDF ? '5 min' : '3 min'}. Try a faster model.`)
@@ -552,7 +559,7 @@ function SuggestMissingPanel({ doc, model, onAddFailure }) {
 }
 
 // ── ResultsSection ────────────────────────────────────────────────────────────
-function ResultsSection({ open, onToggle, doc, onReset, onEdit, onDelete, onAI, model, onAddSuggestedFailure, onShowStatus }) {
+function ResultsSection({ open, onToggle, doc, onReset, onEdit, onDelete, onAI, model, onAddSuggestedFailure, onShowStatus, onSaveSession, saveBusy, saveDirty, saveError, saveSuccess }) {
   const [activeFn, setActiveFn] = useState(0)
   useEffect(() => { setActiveFn(0) }, [doc?.source_file, doc?.part_name])
 
@@ -595,11 +602,24 @@ function ResultsSection({ open, onToggle, doc, onReset, onEdit, onDelete, onAI, 
         </div>
         <div className="flex items-center gap-2">
           <button onClick={onReset} className="text-sm border border-slate-300 dark:border-slate-600 px-3 py-1.5 rounded-lg hover:border-blue-500 hover:text-blue-600 dark:text-slate-300 transition-colors">← New Document</button>
+          <button onClick={onSaveSession} disabled={saveBusy || !saveDirty} className="text-sm px-3 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-white border border-amber-500 transition-colors">{saveBusy ? 'Saving...' : 'Save Session'}</button>
           <button onClick={onShowStatus} className="text-sm px-3 py-1.5 rounded-lg bg-slate-700 hover:bg-slate-800 text-white border border-slate-700 transition-colors">Failure Status</button>
           <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-blue-500 text-white border border-blue-500 cursor-not-allowed opacity-75">FMEA Dashboards</button>
           <button disabled className="text-sm px-3 py-1.5 rounded-lg bg-green-600 text-white border border-green-600 cursor-not-allowed opacity-75">FMEA Report</button>
         </div>
       </div>
+
+      {(saveError || saveSuccess || saveDirty) && (
+        <div className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
+          saveError
+            ? 'border-red-200 bg-red-50 text-red-700'
+            : saveDirty
+              ? 'border-amber-200 bg-amber-50 text-amber-800'
+              : 'border-emerald-200 bg-emerald-50 text-emerald-700'
+        }`}>
+          {saveError || (saveDirty ? 'There are unsaved changes in this session.' : saveSuccess)}
+        </div>
+      )}
 
       {fnList.length > 1 && (
         <div className="flex flex-wrap gap-2 mb-5 p-3 bg-slate-50 dark:bg-slate-700/30 rounded-xl border border-slate-100 dark:border-slate-700">
@@ -987,6 +1007,126 @@ function FailureStatusModal({ doc, onClose }) {
   )
 }
 
+function MyFmeasModal({ sessions, onClose, onLoadRecords, onDeleteSession }) {
+  const [loadingId, setLoadingId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    const h = e => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('keydown', h)
+    return () => document.removeEventListener('keydown', h)
+  }, [onClose])
+
+  async function openSession(sessionId) {
+    setLoadingId(sessionId)
+    setError('')
+    try {
+      const res = await fetch(`${API}/sessions/${sessionId}/document`)
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.detail || `Server error ${res.status}`)
+      }
+      const data = await res.json()
+      onLoadRecords(data)
+      onClose()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoadingId(null)
+    }
+  }
+
+  async function deleteSession(sessionId, label) {
+    const confirmed = window.confirm(`Delete the session "${label}"? This will remove its persisted records.`)
+    if (!confirmed) return
+
+    setDeletingId(sessionId)
+    setError('')
+    try {
+      const res = await fetch(`${API}/sessions/${sessionId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.detail || `Server error ${res.status}`)
+      }
+      onDeleteSession(sessionId)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}>
+      <div className="bg-white dark:bg-slate-800 rounded-2xl w-full max-w-4xl shadow-2xl border border-slate-200 dark:border-slate-700 flex flex-col max-h-[85vh]">
+        <div className="flex items-start justify-between px-6 py-5 border-b border-slate-100 dark:border-slate-700 shrink-0">
+          <div>
+            <h2 className="text-lg font-bold text-slate-800 dark:text-white">My FMEAs</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Persisted sessions available in the database</p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-2xl leading-none mt-0.5">×</button>
+        </div>
+
+        <div className="px-6 py-5 overflow-y-auto flex-1">
+          {error && (
+            <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-700 rounded-xl text-sm text-red-600 dark:text-red-400">
+              {error}
+            </div>
+          )}
+
+          {sessions.length === 0 ? (
+            <p className="text-center text-slate-400 py-10 text-sm">No persisted sessions found.</p>
+          ) : (
+            <div className="space-y-3">
+              {sessions.map(session => (
+                <div key={session.id} className="border border-slate-200 dark:border-slate-700 rounded-xl p-4 bg-slate-50 dark:bg-slate-900/30">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-700 dark:text-slate-200 truncate">
+                        {session.part_name || 'Untitled FMEA'}
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 truncate">
+                        {session.supplier || 'Unknown supplier'}
+                      </p>
+                      <div className="flex flex-wrap gap-3 mt-3 text-xs text-slate-500 dark:text-slate-400">
+                        <span>{fmtDate(session.created_at)}</span>
+                        <span>{session.record_count || 0} records</span>
+                        <span>{session.source_file || 'Manual entry'}</span>
+                        <span className="uppercase tracking-wide">{session.status}</span>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 flex items-center gap-2">
+                      <button
+                        onClick={() => deleteSession(session.id, session.part_name || 'Untitled FMEA')}
+                        disabled={deletingId === session.id || loadingId === session.id}
+                        className="text-sm px-4 py-2 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50 font-medium transition-colors"
+                      >
+                        {deletingId === session.id ? 'Deleting...' : 'Delete'}
+                      </button>
+                      <button
+                        onClick={() => openSession(session.id)}
+                        disabled={loadingId === session.id || deletingId === session.id}
+                        className="text-sm px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-medium transition-colors"
+                      >
+                        {loadingId === session.id ? 'Opening...' : 'Open'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [dark,  setDark]  = useState(false)
@@ -996,6 +1136,10 @@ export default function App() {
   const [myFmeasOpen, setMyFmeasOpen] = useState(false)
   const [myFmeas, setMyFmeas] = useState([])
   const [statusOpen, setStatusOpen] = useState(false)
+  const [saveBusy, setSaveBusy] = useState(false)
+  const [saveDirty, setSaveDirty] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const [saveSuccess, setSaveSuccess] = useState('')
 
   const [openAbout, setOpenAbout] = useState(false)
   const [open1A,    setOpen1A]    = useState(true)
@@ -1009,8 +1153,11 @@ export default function App() {
     document.body.className = dark ? 'bg-slate-900 text-slate-100 transition-colors' : 'bg-slate-50 text-slate-900 transition-colors'
   }, [dark])
 
-  const handleExtracted = async newDoc => {
+  const handleExtracted = async (newDoc, originalFile = null) => {
     setDoc(newDoc)
+    setSaveDirty(false)
+    setSaveError('')
+    setSaveSuccess('')
     setOpen1A(false)
     setOpen1B(false)
     setOpen2(true)
@@ -1023,18 +1170,32 @@ export default function App() {
           supplier: newDoc.supplier || 'Unknown',
           source_file: newDoc.source_file || newDoc.part_name || 'upload',
           records: newDoc.records || [],
+          columns: newDoc._columns || [],
+          document: newDoc,
           language: newDoc.language || 'en',
         }),
       })
       if (res.ok) {
         const d = await res.json()
         setSessionId(d.session_id)
+        setSaveSuccess('Session saved from extraction.')
+        if (originalFile) {
+          const form = new FormData()
+          form.append('file', originalFile)
+          await fetch(`${API}/sessions/${d.session_id}/files`, {
+            method: 'POST',
+            body: form,
+          })
+        }
       }
     } catch (_) {}
   }
-  const handleReset     = ()     => { setDoc(null); setOpen1A(true); setOpen2(false) }
+  const handleReset     = ()     => { setDoc(null); setSessionId(null); setSaveDirty(false); setSaveError(''); setSaveSuccess(''); setOpen1A(true); setOpen2(false) }
 
   function handleEdit(gi, field, value) {
+    setSaveDirty(true)
+    setSaveError('')
+    setSaveSuccess('')
     setDoc(prev => ({
       ...prev,
       records: prev.records.map((r, i) => {
@@ -1067,6 +1228,9 @@ export default function App() {
     if (modal.recordIdx !== null) {
       const gi = modal.recordIdx
       const field = modal.field
+      setSaveDirty(true)
+      setSaveError('')
+      setSaveSuccess('')
       setDoc(prev => ({
         ...prev,
         records: prev.records.map((r, i) => {
@@ -1149,6 +1313,9 @@ export default function App() {
   }
 
   const handleDelete = gi => {
+    setSaveDirty(true)
+    setSaveError('')
+    setSaveSuccess('')
     setDoc(prev => ({ ...prev, records: prev.records.filter((_, i) => i !== gi) }))
   }
 
@@ -1160,6 +1327,9 @@ export default function App() {
     if (alreadyExists) return
     const existing  = doc.records.find(r => (r.function || r.component || '') === suggestion.function)
     const component = existing ? (existing.component || '') : ''
+    setSaveDirty(true)
+    setSaveError('')
+    setSaveSuccess('')
     setDoc(prev => ({ ...prev, records: [...prev.records, {
       component, function: suggestion.function, failure_mode: suggestion.failure_mode,
       effect: suggestion.effect, cause: suggestion.cause,
@@ -1168,6 +1338,52 @@ export default function App() {
       source_file: 'AI suggestion',
       _aiNew: true,
     }]}))
+  }
+
+  const handleSaveSession = async () => {
+    if (!sessionId || !doc || saveBusy) return
+
+    setSaveBusy(true)
+    setSaveError('')
+    setSaveSuccess('')
+    try {
+      const res = await fetch(`${API}/sessions/${sessionId}/document`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          part_name: doc.part_name || 'Unknown',
+          supplier: doc.supplier || 'Unknown',
+          source_file: doc.source_file || doc.part_name || 'upload',
+          records: doc.records || [],
+          columns: doc._columns || [],
+          document: doc,
+          language: doc.language || 'en',
+          status: 'in_progress',
+        }),
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        throw new Error(e.detail || `Server error ${res.status}`)
+      }
+      setSaveDirty(false)
+      setSaveSuccess('Session saved successfully.')
+      setMyFmeas(prev => prev.map(session => (
+        session.id === sessionId
+          ? {
+              ...session,
+              part_name: doc.part_name || session.part_name,
+              supplier: doc.supplier || session.supplier,
+              source_file: doc.source_file || session.source_file,
+              record_count: doc.records?.length || 0,
+              status: 'in_progress',
+            }
+          : session
+      )))
+    } catch (e) {
+      setSaveError(e.message)
+    } finally {
+      setSaveBusy(false)
+    }
   }
 
   return (
@@ -1194,16 +1410,37 @@ export default function App() {
           <div className="flex-1"><NewFmeaSection open={open1B} onToggle={() => setOpen1B(o => !o)} onCreated={handleExtracted} /></div>
         </div>
 
-        <ResultsSection open={open2} onToggle={() => setOpen2(o => !o)} doc={doc} onReset={handleReset} onEdit={handleEdit} onDelete={handleDelete} onAI={handleAI} model={model} onAddSuggestedFailure={handleAddSuggestedFailure} onShowStatus={() => setStatusOpen(true)} />
+        <ResultsSection open={open2} onToggle={() => setOpen2(o => !o)} doc={doc} onReset={handleReset} onEdit={handleEdit} onDelete={handleDelete} onAI={handleAI} model={model} onAddSuggestedFailure={handleAddSuggestedFailure} onShowStatus={() => setStatusOpen(true)} onSaveSession={handleSaveSession} saveBusy={saveBusy} saveDirty={saveDirty} saveError={saveError} saveSuccess={saveSuccess} />
         <AIModal modal={modal} onApply={applyAI} onDismiss={dismissAI} onClose={() => setModal(m => ({ ...m, open: false }))} />
         {statusOpen && <FailureStatusModal doc={doc} onClose={() => setStatusOpen(false)} />}
         {myFmeasOpen && (
           <MyFmeasModal
             sessions={myFmeas}
             onClose={() => setMyFmeasOpen(false)}
+            onDeleteSession={deletedId => {
+              setMyFmeas(prev => prev.filter(session => session.id !== deletedId))
+              if (sessionId === deletedId) {
+                setSessionId(null)
+                setDoc(null)
+                setOpen2(false)
+                setOpen1A(true)
+              }
+            }}
             onLoadRecords={loaded => {
-              setDoc({ part_name: loaded.part_name, supplier: loaded.supplier, records: loaded.records })
+              setSessionId(loaded.session_id)
+              setSaveDirty(false)
+              setSaveError('')
+              setSaveSuccess('Session loaded from persistence.')
+              setDoc({
+                part_name: loaded.part_name,
+                supplier: loaded.supplier,
+                source_file: loaded.source_file,
+                _columns: loaded.columns || [],
+                records: loaded.records || [],
+              })
               setOpen2(true)
+              setOpen1A(false)
+              setOpen1B(false)
             }}
           />
         )}

@@ -46,6 +46,7 @@ class FMEASession(Base):
     uploaded_files = relationship("UploadedFile", back_populates="session")
     fmea_records = relationship("FMEARecord", back_populates="session")
     ai_suggestions = relationship("AISuggestion", back_populates="session")
+    artifacts = relationship("SessionArtifact", back_populates="session")
     reports = relationship("FMEAReport", back_populates="session")
     meetings = relationship("Meeting", back_populates="session")
 
@@ -66,6 +67,27 @@ class UploadedFile(Base):
     minio_key = Column(String(1000))
 
     session = relationship("FMEASession", back_populates="uploaded_files")
+
+
+# ---------------------------------------------------------------------------
+# 2b. session_artifacts — versioned derived outputs for a session
+# ---------------------------------------------------------------------------
+class SessionArtifact(Base):
+    __tablename__ = "session_artifacts"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(UUID(as_uuid=True), ForeignKey("fmea_sessions.id", ondelete="CASCADE"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    artifact_type = Column(String(100), nullable=False)      # extraction_snapshot | optimized_article | report
+    artifact_format = Column(String(20), nullable=False)     # json | pdf | html | md | docx
+    version = Column(Integer, nullable=False, default=1)
+    title = Column(String(500))
+    is_active = Column(Boolean, nullable=False, default=True)
+    content = Column(JSONB)
+    minio_bucket = Column(String(255))
+    minio_key = Column(String(1000))
+
+    session = relationship("FMEASession", back_populates="artifacts")
 
 
 # ---------------------------------------------------------------------------

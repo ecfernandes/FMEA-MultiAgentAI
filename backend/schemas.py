@@ -244,6 +244,8 @@ class SessionResponse(BaseModel):
     status: str = Field("draft", description="draft | in_progress | completed")
     language: str = Field("en")
     industry: Optional[str] = None
+    record_count: int = 0
+    source_file: Optional[str] = None
 
 
 class SessionUpdate(BaseModel):
@@ -272,6 +274,8 @@ class SaveExtractionRequest(BaseModel):
     supplier: Optional[str] = "Unknown"
     source_file: str
     records: List[dict] = Field(default_factory=list)
+    columns: List[str] = Field(default_factory=list)
+    document: Optional[dict] = None
     language: Optional[str] = "en"
     industry: Optional[str] = None
     user_id: Optional[str] = None
@@ -281,6 +285,28 @@ class SaveExtractionResponse(BaseModel):
     """Response from POST /sessions/from-extraction."""
     session_id: str
     records_saved: int
+    artifact_id: Optional[str] = None
+
+
+class SaveSessionRequest(BaseModel):
+    """Request body for PUT /sessions/{session_id}/document."""
+    part_name: str
+    supplier: Optional[str] = "Unknown"
+    source_file: str
+    records: List[dict] = Field(default_factory=list)
+    columns: List[str] = Field(default_factory=list)
+    document: Optional[dict] = None
+    language: Optional[str] = "en"
+    industry: Optional[str] = None
+    user_id: Optional[str] = None
+    status: Optional[str] = Field("in_progress", description="draft | in_progress | completed")
+
+
+class SaveSessionResponse(BaseModel):
+    """Response from PUT /sessions/{session_id}/document."""
+    session_id: str
+    records_saved: int
+    artifact_id: Optional[str] = None
 
 
 class SaveSuggestionRequest(BaseModel):
@@ -313,7 +339,32 @@ class SessionRecordsResponse(BaseModel):
     part_name: Optional[str] = None
     supplier: Optional[str] = None
     source_file: Optional[str] = None
+    columns: List[str] = Field(default_factory=list)
     records: List[dict] = Field(default_factory=list)
+
+
+class SessionFileResponse(BaseModel):
+    id: str
+    original_filename: str
+    uploaded_at: str
+    content_type: Optional[str] = None
+    size_bytes: Optional[int] = None
+    download_url: Optional[str] = None
+
+
+class SessionFilesResponse(BaseModel):
+    session_id: str
+    files: List[SessionFileResponse] = Field(default_factory=list)
+
+
+class SessionDocumentResponse(BaseModel):
+    session_id: str
+    part_name: Optional[str] = None
+    supplier: Optional[str] = None
+    source_file: Optional[str] = None
+    columns: List[str] = Field(default_factory=list)
+    records: List[dict] = Field(default_factory=list)
+    files: List[SessionFileResponse] = Field(default_factory=list)
 
 
 # ============================================================================

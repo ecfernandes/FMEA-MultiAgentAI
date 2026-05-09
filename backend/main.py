@@ -29,6 +29,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func as sa_func, String as sa_String
 import sqlalchemy as sa
+from sqlalchemy.orm import selectinload
 
 from backend.schemas import (
     AgentRequest,
@@ -41,16 +42,22 @@ from backend.schemas import (
     MissingFailureSuggestion,
     SaveExtractionRequest,
     SaveExtractionResponse,
+    SaveSessionRequest,
+    SaveSessionResponse,
     SaveSuggestionRequest,
     SaveSuggestionResponse,
     SessionCreate,
+    SessionDocumentResponse,
+    SessionFileResponse,
+    SessionFilesResponse,
     SessionListResponse,
     SessionRecordsResponse,
     SessionResponse,
     SessionUpdate,
 )
 from backend.database import get_db
-from backend.models import FMEASession, FMEARecord, AISuggestion
+from backend.models import AISuggestion, FMEARecord, FMEASession, SessionArtifact, UploadedFile
+from backend.storage import BUCKET_DOCUMENTS, document_key, ensure_buckets, get_presigned_url, upload_bytes
 from backend.services.extractor import extract_file
 from backend.agents.specialist_agents import route_and_call
 
@@ -62,11 +69,17 @@ load_dotenv(dotenv_path=_ENV_FILE, override=True)
 # LIFESPAN — startup / shutdown hooks
 # ============================================================================
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await ensure_buckets()
+    yield
+
 # ============================================================================
 # APP FACTORY
 # ============================================================================
 
 app = FastAPI(
+    lifespan    = lifespan,
     title       = "AI-Driven FMEA 5.0 API",
     description = (
         "REST backend for multi-agent FMEA analysis.\n\n"
@@ -516,6 +529,7 @@ async def suggest_missing_failures(
         "RULES:\n"
         "- Only suggest failure modes that represent genuine, significant engineering risks\n"
         "- Do NOT suggest trivial modifications, duplicates, or paraphrases of existing modes\n"
+        "- Return AT MOST 5 suggestions — prioritise the most critical ones\n"
         "- If ALL important failure modes are already covered, set all_covered=true and return an empty suggestions list\n"
         "- Return ONLY a valid JSON object — no markdown fences, no preamble, no commentary\n\n"
         "Return format (strict):\n"
@@ -594,7 +608,7 @@ async def suggest_missing_failures(
                 {"role": "user",   "content": user_prompt},
             ],
             temperature=0.2,
-            max_tokens=3000,
+            max_tokens=1500,
         )
         raw = response.choices[0].message.content.strip()
 
@@ -652,6 +666,9 @@ async def suggest_missing_failures(
 
 def _session_to_schema(s: FMEASession) -> SessionResponse:
     """Convert ORM FMEASession to SessionResponse Pydantic model."""
+    source_file = None
+    if s.uploaded_files:
+        source_file = s.uploaded_files[0].original_filename
     return SessionResponse(
         id         = str(s.id),
         created_at = s.created_at.isoformat() if s.created_at else "",
@@ -662,7 +679,117 @@ def _session_to_schema(s: FMEASession) -> SessionResponse:
         status     = s.status or "draft",
         language   = s.language or "en",
         industry   = s.industry,
+        record_count= len(s.fmea_records or []),
+        source_file = source_file,
     )
+
+
+def _record_to_dict(r: FMEARecord) -> dict:
+    d = {
+        "component": r.component,
+        "failure_mode": r.failure_mode,
+        "effect": r.effect,
+        "cause": r.cause,
+        "severity": r.severity,
+        "occurrence": r.occurrence,
+        "detection": r.detection,
+        "rpn": r.rpn,
+        "recommended_action": r.recommended_action,
+    }
+    if r.extra_fields:
+        d.update(r.extra_fields)
+    return d
+
+
+def _normalize_record_payload(r: dict) -> tuple[int | None, int | None, int | None, int | None, dict | None]:
+    core = {
+        "component", "failure_mode", "effect", "cause",
+        "severity", "occurrence", "detection", "rpn", "recommended_action",
+    }
+    try:
+        sev = int(r["severity"]) if r.get("severity") not in (None, "") else None
+    except (ValueError, TypeError):
+        sev = None
+    try:
+        occ = int(r["occurrence"]) if r.get("occurrence") not in (None, "") else None
+    except (ValueError, TypeError):
+        occ = None
+    try:
+        det = int(r["detection"]) if r.get("detection") not in (None, "") else None
+    except (ValueError, TypeError):
+        det = None
+    rpn = (sev * occ * det) if (sev and occ and det) else None
+    extra = {k: v for k, v in r.items() if k not in core}
+    return sev, occ, det, rpn, extra if extra else None
+
+
+def _build_snapshot(body: SaveExtractionRequest | SaveSessionRequest) -> dict:
+    snapshot = dict(body.document or {})
+    if not snapshot:
+        snapshot = {
+            "part_name": body.part_name,
+            "supplier": body.supplier,
+            "source_file": body.source_file,
+            "records": body.records,
+        }
+    else:
+        snapshot["part_name"] = body.part_name
+        snapshot["supplier"] = body.supplier
+        snapshot["source_file"] = body.source_file
+        snapshot["records"] = body.records
+    if body.columns:
+        snapshot["_columns"] = body.columns
+    return snapshot
+
+
+def _file_to_schema(uploaded: UploadedFile) -> SessionFileResponse:
+    download_url = None
+    if uploaded.minio_bucket and uploaded.minio_key:
+        try:
+            download_url = get_presigned_url(uploaded.minio_bucket, uploaded.minio_key)
+        except Exception:
+            download_url = None
+    return SessionFileResponse(
+        id=str(uploaded.id),
+        original_filename=uploaded.original_filename,
+        uploaded_at=uploaded.uploaded_at.isoformat() if uploaded.uploaded_at else "",
+        content_type=uploaded.content_type,
+        size_bytes=uploaded.size_bytes,
+        download_url=download_url,
+    )
+
+
+async def _get_session_or_404(db: AsyncSession, session_id: str) -> FMEASession:
+    result = await db.execute(
+        select(FMEASession).where(FMEASession.id == session_id)
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    return session
+
+
+async def _get_session_files(db: AsyncSession, session_id: str) -> list[UploadedFile]:
+    result = await db.execute(
+        select(UploadedFile)
+        .where(UploadedFile.session_id == session_id)
+        .order_by(UploadedFile.uploaded_at.desc())
+    )
+    return result.scalars().all()
+
+
+async def _get_active_snapshot(db: AsyncSession, session_id: str) -> SessionArtifact | None:
+    result = await db.execute(
+        select(SessionArtifact)
+        .where(
+            SessionArtifact.session_id == session_id,
+            SessionArtifact.artifact_type == "extraction_snapshot",
+            SessionArtifact.is_active.is_(True),
+        )
+        .order_by(SessionArtifact.version.desc(), SessionArtifact.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 @app.post(
@@ -714,6 +841,10 @@ async def list_sessions(
 
     result = await db.execute(
         select(FMEASession)
+        .options(
+            selectinload(FMEASession.uploaded_files),
+            selectinload(FMEASession.fmea_records),
+        )
         .order_by(FMEASession.created_at.desc())
         .limit(limit)
         .offset(offset)
@@ -741,7 +872,12 @@ async def get_session(
     Raises 404 if not found.
     """
     result = await db.execute(
-        select(FMEASession).where(FMEASession.id == session_id)
+        select(FMEASession)
+        .options(
+            selectinload(FMEASession.uploaded_files),
+            selectinload(FMEASession.fmea_records),
+        )
+        .where(FMEASession.id == session_id)
     )
     session = result.scalar_one_or_none()
     if session is None:
@@ -834,26 +970,8 @@ async def save_extraction(
     db.add(session)
     await db.flush()
 
-    CORE = {
-        "component", "function", "item_function", "failure_mode", "effect", "cause",
-        "severity", "occurrence", "detection", "rpn", "recommended_action",
-        "source_file", "sheet_name", "row_number",
-    }
     for r in body.records:
-        try:
-            sev = int(r["severity"]) if r.get("severity") not in (None, "") else None
-        except (ValueError, TypeError):
-            sev = None
-        try:
-            occ = int(r["occurrence"]) if r.get("occurrence") not in (None, "") else None
-        except (ValueError, TypeError):
-            occ = None
-        try:
-            det = int(r["detection"]) if r.get("detection") not in (None, "") else None
-        except (ValueError, TypeError):
-            det = None
-        rpn = (sev * occ * det) if (sev and occ and det) else None
-        extra = {k: v for k, v in r.items() if k not in CORE}
+        sev, occ, det, rpn, extra = _normalize_record_payload(r)
         record = FMEARecord(
             session_id=session.id,
             component=r.get("component"),
@@ -869,11 +987,207 @@ async def save_extraction(
         )
         db.add(record)
 
+    snapshot = _build_snapshot(body)
+
+    artifact = SessionArtifact(
+        session_id=session.id,
+        artifact_type="extraction_snapshot",
+        artifact_format="json",
+        version=1,
+        title=body.source_file or body.part_name,
+        is_active=True,
+        content=snapshot,
+    )
+    db.add(artifact)
+
     await db.commit()
     await db.refresh(session)
+    await db.refresh(artifact)
     return SaveExtractionResponse(
         session_id=str(session.id),
         records_saved=len(body.records),
+        artifact_id=str(artifact.id),
+    )
+
+
+@app.put(
+    "/sessions/{session_id}/document",
+    response_model=SaveSessionResponse,
+    tags=["Sessions"],
+    summary="Persist the current edited document for an existing session",
+)
+async def save_session_document(
+    session_id: str,
+    body: SaveSessionRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SaveSessionResponse:
+    session = await _get_session_or_404(db, session_id)
+
+    session.part_name = body.part_name
+    session.supplier = body.supplier
+    session.language = body.language or session.language or "en"
+    session.industry = body.industry
+    session.user_id = body.user_id
+    session.status = body.status or "in_progress"
+
+    await db.execute(
+        sa.delete(FMEARecord).where(FMEARecord.session_id == session.id)
+    )
+
+    for r in body.records:
+        sev, occ, det, rpn, extra = _normalize_record_payload(r)
+        db.add(FMEARecord(
+            session_id=session.id,
+            component=r.get("component"),
+            failure_mode=r.get("failure_mode"),
+            effect=r.get("effect"),
+            cause=r.get("cause"),
+            severity=sev,
+            occurrence=occ,
+            detection=det,
+            rpn=rpn,
+            recommended_action=r.get("recommended_action"),
+            extra_fields=extra,
+        ))
+
+    await db.execute(
+        sa.update(SessionArtifact)
+        .where(
+            SessionArtifact.session_id == session.id,
+            SessionArtifact.artifact_type == "extraction_snapshot",
+            SessionArtifact.is_active.is_(True),
+        )
+        .values(is_active=False)
+    )
+
+    version_result = await db.execute(
+        select(sa_func.max(SessionArtifact.version)).where(
+            SessionArtifact.session_id == session.id,
+            SessionArtifact.artifact_type == "extraction_snapshot",
+        )
+    )
+    next_version = (version_result.scalar_one() or 0) + 1
+
+    artifact = SessionArtifact(
+        session_id=session.id,
+        artifact_type="extraction_snapshot",
+        artifact_format="json",
+        version=next_version,
+        title=body.source_file or body.part_name,
+        is_active=True,
+        content=_build_snapshot(body),
+    )
+    db.add(artifact)
+
+    await db.flush()
+    await db.refresh(session)
+    await db.refresh(artifact)
+    return SaveSessionResponse(
+        session_id=str(session.id),
+        records_saved=len(body.records),
+        artifact_id=str(artifact.id),
+    )
+
+
+@app.post(
+    "/sessions/{session_id}/files",
+    response_model=SessionFileResponse,
+    status_code=201,
+    tags=["Sessions"],
+    summary="Persist the original uploaded file for a session",
+)
+async def upload_session_file(
+    session_id: str,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+) -> SessionFileResponse:
+    session = await _get_session_or_404(db, session_id)
+
+    filename = Path(file.filename or "upload.bin").name
+    payload = await file.read()
+
+    uploaded = UploadedFile(
+        session_id=session.id,
+        original_filename=filename,
+        content_type=file.content_type,
+        size_bytes=len(payload),
+    )
+    db.add(uploaded)
+    await db.flush()
+
+    key = document_key(session_id, f"{uploaded.id}-{filename}")
+    upload_bytes(
+        BUCKET_DOCUMENTS,
+        key,
+        payload,
+        content_type=file.content_type or "application/octet-stream",
+    )
+
+    uploaded.minio_bucket = BUCKET_DOCUMENTS
+    uploaded.minio_key = key
+    await db.commit()
+    await db.refresh(uploaded)
+    return _file_to_schema(uploaded)
+
+
+@app.get(
+    "/sessions/{session_id}/files",
+    response_model=SessionFilesResponse,
+    tags=["Sessions"],
+    summary="List original uploaded files for a session",
+)
+async def list_session_files(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionFilesResponse:
+    await _get_session_or_404(db, session_id)
+    files = await _get_session_files(db, session_id)
+    return SessionFilesResponse(
+        session_id=session_id,
+        files=[_file_to_schema(item) for item in files],
+    )
+
+
+@app.get(
+    "/sessions/{session_id}/document",
+    response_model=SessionDocumentResponse,
+    tags=["Sessions"],
+    summary="Get the active persisted document for a session",
+)
+async def get_session_document(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> SessionDocumentResponse:
+    session = await _get_session_or_404(db, session_id)
+    files = await _get_session_files(db, session_id)
+    snapshot = await _get_active_snapshot(db, session_id)
+
+    if snapshot and snapshot.content:
+        content = dict(snapshot.content)
+        columns = content.pop("_columns", []) or []
+        return SessionDocumentResponse(
+            session_id=session_id,
+            part_name=content.get("part_name") or session.part_name,
+            supplier=content.get("supplier") or session.supplier,
+            source_file=content.get("source_file") or (files[0].original_filename if files else None),
+            columns=columns,
+            records=content.get("records") or [],
+            files=[_file_to_schema(item) for item in files],
+        )
+
+    rec_result = await db.execute(
+        select(FMEARecord)
+        .where(FMEARecord.session_id == session_id)
+        .order_by(FMEARecord.created_at)
+    )
+    records = rec_result.scalars().all()
+    return SessionDocumentResponse(
+        session_id=session_id,
+        part_name=session.part_name,
+        supplier=session.supplier,
+        source_file=files[0].original_filename if files else None,
+        records=[_record_to_dict(r) for r in records],
+        files=[_file_to_schema(item) for item in files],
     )
 
 
@@ -937,12 +1251,7 @@ async def get_session_records(
     Returns all FMEARecord rows for a given session, reconstructed as plain dicts
     suitable for the frontend document format.
     """
-    sess_result = await db.execute(
-        select(FMEASession).where(FMEASession.id == session_id)
-    )
-    session = sess_result.scalar_one_or_none()
-    if session is None:
-        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+    session = await _get_session_or_404(db, session_id)
 
     rec_result = await db.execute(
         select(FMEARecord)
@@ -950,28 +1259,18 @@ async def get_session_records(
         .order_by(FMEARecord.created_at)
     )
     records = rec_result.scalars().all()
-
-    def _to_dict(r: FMEARecord) -> dict:
-        d = {
-            "component": r.component,
-            "failure_mode": r.failure_mode,
-            "effect": r.effect,
-            "cause": r.cause,
-            "severity": r.severity,
-            "occurrence": r.occurrence,
-            "detection": r.detection,
-            "rpn": r.rpn,
-            "recommended_action": r.recommended_action,
-        }
-        if r.extra_fields:
-            d.update(r.extra_fields)
-        return d
+    files = await _get_session_files(db, session_id)
+    snapshot = await _get_active_snapshot(db, session_id)
+    columns = []
+    if snapshot and snapshot.content:
+        columns = snapshot.content.get("_columns", []) or []
 
     return SessionRecordsResponse(
         session_id=session_id,
         part_name=session.part_name,
         supplier=session.supplier,
-        source_file=session.part_name,
-        records=[_to_dict(r) for r in records],
+        source_file=(files[0].original_filename if files else None),
+        columns=columns,
+        records=[_record_to_dict(r) for r in records],
     )
 

@@ -231,12 +231,12 @@ Please consider the environment before printing this email.
     # Apply comprehensive cleaning
     cleaned = remove_artifacts(
         sample_document,
-        remove_signatures=True,
-        remove_disclaimers=True,
-        remove_headers_footers=True,
-        remove_page_numbers=True,
-        remove_boilerplate=True,
-        remove_noise=True
+        do_signatures=True,
+        do_disclaimers=True,
+        do_headers_footers=True,
+        do_page_numbers=True,
+        do_boilerplate=True,
+        do_noise=True
     )
     
     print("\nCLEANED TEXT:")

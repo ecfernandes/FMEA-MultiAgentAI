@@ -1,299 +1,308 @@
 # An Integrated Multi-Agent System for AI-Driven FMEA Auditing
 
 ## Postdoctoral Research Project
-**UTC (France) | CIT (Japan)**
+
+**UTC (France) | CIT (Japan)**  
 **Researcher:** Ederson Carvalhar Fernandes
 
 ---
 
+## Overview
 
-## Quick Start (Docker — recommended)
+This repository contains an AI-assisted FMEA platform with:
 
+- a FastAPI backend for extraction, persistence, and specialist-agent workflows
+- a React frontend for document upload, review, AI suggestions, and session recovery
+- PostgreSQL for relational persistence
+- MinIO for uploaded files and generated artifacts
+- ChromaDB for book-based retrieval infrastructure
 
-```bash
-cp .env.example .env        # fill in UTCLLM_API_KEY and all required variables
-# NUNCA versionar .env (já está no .gitignore)
-docker compose up --build   # first run: builds and starts everything
-docker compose up           # subsequent runs (no rebuild needed)
-```
-
-
-The app is available at:
-- **UI:** http://localhost:5174 (React + Vite, served by nginx)
-- **API docs:** http://localhost:8001/docs (Swagger UI)
-- **API base:** http://localhost:8001
+The current persistence model is Alembic-first: database schema changes are applied through migrations, and the application no longer relies on SQLAlchemy `create_all()` during startup.
 
 ---
 
+## Quick Start With Docker
 
-## Local Development (without Docker)
-
-
-**Requirements:** Python 3.11+, [Poetry](https://python-poetry.org/docs/#installation)
-
+1. Create a `.env` file from `.env.example` and fill in the required values, especially `UTCLLM_API_KEY`.
+2. Never commit `.env` to version control.
+3. Start the full stack:
 
 ```bash
-poetry install              # installs all dependencies from poetry.lock
+docker compose up --build
+```
+
+Subsequent runs usually do not need a rebuild:
+
+```bash
+docker compose up
+```
+
+Available services:
+
+- UI: http://localhost:5174
+- API base: http://localhost:8001
+- Swagger UI: http://localhost:8001/docs
+- ReDoc: http://localhost:8001/redoc
+- MinIO API: http://localhost:9000
+- MinIO Console: http://localhost:9001
+- PostgreSQL: `localhost:5433`
+
+### Docker Startup Notes
+
+The `api` container runs this boot sequence:
+
+1. `alembic upgrade head`
+2. `uvicorn backend.main:app --host 0.0.0.0 --port 8000`
+
+If you keep following container logs after startup, repeated `GET /health` entries are expected. They are health checks, not a migration still running.
+
+---
+
+## Local Development
+
+### Backend
+
+Requirements:
+
+- Python 3.11+
+- Poetry
+- PostgreSQL and MinIO available locally or through Docker
+
+Install dependencies and apply migrations:
+
+```bash
+poetry install
+poetry run alembic upgrade head
 poetry run uvicorn backend.main:app --reload --port 8001
 ```
 
+### Frontend
 
-Frontend (optional React UI):
+Requirements:
 
-
-> **Requirements:** Node.js 18+ must be installed and available in PATH.
+- Node.js 18+
 
 ```bash
 cd frontend
-npm ci          # installs exact versions from package-lock.json
-npm run dev     # starts Vite dev server at http://localhost:5173
+npm ci
+npm run dev
 ```
 
+Frontend URLs by mode:
 
-**Frontend: local Vite vs Docker**
+| Mode | URL | Use case |
+|------|-----|----------|
+| Local Vite dev server | http://localhost:5173 | Fast frontend iteration |
+| Docker web container | http://localhost:5174 | Production-like frontend build |
 
-| Mode | URL | When to use |
-|------|-----|-------------|
-| `npm run dev` (local) | http://localhost:5173 | Development — changes appear instantly, no rebuild needed |
-| Docker (`web` container) | http://localhost:5174 | Production-like — serves compiled `dist/` via nginx |
-
-
-When developing, stop the `web` Docker container and use `npm run dev` instead.
-The `api` backend container stays running in both cases.
-After finishing, restart the `web` container: `docker compose up web`.
+When developing the frontend locally, it is usually better to stop the Docker `web` container and keep the Docker `api` container running.
 
 ---
 
-
 ## Updating Dependencies
 
-When you need to add or update a package:
+Use Poetry as the source of truth for Python dependencies.
 
 ```bash
-# 1. Edit pyproject.toml (add/change the package version)
-# or run:
-poetry add <package>          # add new package
-poetry update <package>       # update one package
-poetry update                 # update all within version constraints
+poetry add <package>
+poetry update <package>
+poetry update
+```
 
-# 2. Rebuild the Docker image to apply changes
+After dependency changes, rebuild the backend image:
+
+```bash
 docker compose build api
 docker compose up
 ```
 
-
-The `poetry.lock` file must always be committed to git — it guarantees that
-every developer and every Docker build uses the exact same dependency versions.
+Always commit `poetry.lock` together with dependency changes.
 
 ---
 
+## API Summary
 
+### System
 
+- `GET /health` — service health check
+
+### Extraction and Analysis
+
+- `POST /extract` — extract FMEA data from PDF or Excel
+- `POST /extract/stream` — stream PDF extraction page by page
+- `POST /analyze` — request an AI suggestion for a specific FMEA field
+- `POST /missing-failures` — identify candidate failure modes not yet covered
+
+### Book Indexing
+
+- `GET /index/books` — inspect indexed reference-book status
+- `POST /index/books` — index or re-index all books under `Books/`
+
+### Sessions and Persistence
+
+- `POST /sessions` — create a new FMEA session
+- `GET /sessions` — list all sessions
+- `GET /sessions/{session_id}` — get one session
+- `PUT /sessions/{session_id}` — update one session
+- `DELETE /sessions/{session_id}` — delete one session
+- `POST /sessions/from-extraction` — create a session and persist extracted records
+- `PUT /sessions/{session_id}/document` — persist the current edited document for an existing session
+- `POST /sessions/{session_id}/files` — persist the original uploaded file for a session
+- `GET /sessions/{session_id}/files` — list original uploaded files for a session
+- `GET /sessions/{session_id}/document` — get the active persisted document snapshot
+- `GET /sessions/{session_id}/records` — get all saved FMEA records for a session
+- `POST /sessions/{session_id}/suggestions` — persist an AI suggestion and engineer verdict
+
+Interactive API documentation is available in Swagger UI at http://localhost:8001/docs.
 
 ---
 
-## API Endpoints (Sessions & AI Agent)
+## Backend Details
 
-### Session Endpoints (CRUD)
-
-- `POST   /sessions`           — Cria uma nova sessão de análise
-- `GET    /sessions`           — Lista todas as sessões
-- `GET    /sessions/{id}`      — Detalhes de uma sessão
-- `PUT    /sessions/{id}`      — Atualiza dados de uma sessão
-- `DELETE /sessions/{id}`      — Remove uma sessão
-
-Todos os endpoints usam Pydantic v2 para validação e resposta.
-
-### AI Agent Endpoint
-
-- `POST /agent` — Executa análise com modelo LLM selecionável (UTC LLM, OpenAI-compatible)
-    - Parâmetro `model` permite escolher o modelo (ex: qwen3527b-no-think, Mistral, Magistral, etc.)
-
-### Documentação Interativa
-
-Use o Swagger UI em http://localhost:8001/docs para testar todos os endpoints.
+- FastAPI with async endpoints
+- SQLAlchemy async ORM
+- Alembic for schema migrations
+- Pydantic v2 schemas
+- MinIO-backed file persistence
+- ChromaDB-backed reference retrieval infrastructure
+- Docker backend image optimized for CPU-only Torch usage
 
 ---
 
-### Backend Details
+## Persistence and Storage
 
-- FastAPI (async, produção-ready)
-- SQLAlchemy async + Alembic (PostgreSQL)
-- Pydantic v2 (schemas)
-- Dockerfile otimizado: torch CPU-only, sem dependências CUDA
-- .env nunca deve ser versionado (contém chaves e segredos)
+The platform currently uses:
 
----
+- PostgreSQL 16 for relational persistence
+- MinIO for original uploads and future generated artifacts
+- ChromaDB for semantic retrieval over reference books
 
-### Project Structure
-```
-FMEA_AI/
-├── pyproject.toml                 # Dependency management (Poetry)
-├── poetry.lock                    # Pinned dependency versions — always commit this
-├── requirements.txt               # pip fallback (mirrors pyproject.toml)
-├── docker-compose.yml             # Orchestrates API + DB + frontend
-│
-├── backend/                       # FastAPI backend application
-│   ├── Dockerfile                 # Single Dockerfile for the API container
-│   ├── main.py                    # FastAPI entry point
-│   ├── schemas.py                 # Pydantic models
-│   ├── database.py                # SQLAlchemy async engine + session factory
-│   ├── models.py                  # ORM models (10 tables — PostgreSQL)
-│   ├── storage.py                 # MinIO client wrapper
-│   ├── agents/                    # Specialist AI agent modules
-│   └── services/                  # Extraction and indexing services
-│
-├── frontend/                      # React frontend (Vite + Tailwind CSS)
-│   ├── src/
-│   │   ├── App.jsx                # All UI components (migrated from legacy HTML)
-│   │   ├── main.jsx               # React 18 entry point
-│   │   └── index.css              # Tailwind directives + animations
-│   ├── index.html
-│   ├── package.json
-│   ├── tailwind.config.js         # darkMode: 'class', industrial palette
-│   ├── postcss.config.js
-│   └── Dockerfile                 # Multi-stage: node:18-alpine → nginx:alpine
-│
-├── legacy/
-│   └── fmea_app.html              # Original standalone HTML+CDN demo (reference only)
-│
-├── migrations/                    # Alembic database migrations
-│   ├── env.py
-│   └── versions/                  # ac938dff9acc_create_initial_tables.py (APPLIED)
-│
-├── src/                           # Core analytics and utilities
-│   ├── analytics/                 # Monte Carlo, EMV, probability calibration
-│   ├── nlp/                       # NLP, risk analysis, deduplication
-│   ├── preprocessing/             # PDF/Excel FMEA extractors
-│   ├── vector_store/              # ChromaDB manager, embeddings, retriever
-│   └── visualization/             # Ontology builder (Plotly/NetworkX)
-│
-├── data/
-│   ├── sample_documents/          # Example FMEA documents
-│   └── vector_store/              # ChromaDB persistent storage
-│
-├── migrations/                    # Alembic database migrations
-│   ├── env.py                     # Async migration environment
-│   └── versions/                  # Auto-generated migration scripts
-│
-├── Books/                         # Reference books for RAG indexing
-├── Standards/                     # FMEA standards documents
-├── tests/                         # pytest test suite
-└── translations/                  # i18n files (en, fr, pt-br)
+### Main persisted entities
+
+| Table | Purpose |
+|------|---------|
+| `fmea_sessions` | Root entity for each analysis session |
+| `uploaded_files` | Original uploaded file metadata |
+| `session_artifacts` | Versioned derived outputs such as extraction snapshots |
+| `fmea_records` | Persisted FMEA rows |
+| `ai_suggestions` | AI-generated suggestions and review state |
+| `suggestion_feedback` | Engineer decision snapshots for future ML use |
+| `fmea_reports` | JSON or PDF report snapshots |
+| `meetings` | Meeting sessions optionally linked to FMEA work |
+| `meeting_transcripts` | STT outputs and media linkage |
+| `meeting_fmea_links` | Links between transcript segments and FMEA rows |
+| `agent_telemetry` | LLM latency, token usage, and error tracking |
+
+### Migrations
+
+Apply migrations locally with:
+
+```bash
+poetry run alembic upgrade head
 ```
 
-### Key Features (MVP v2.0)
+If you are using a local virtual environment instead of Poetry-managed execution:
 
-Multilingual Support: Interface and prompts available in English, French, and Brazilian Portuguese.
-RAG (Retrieval-Augmented Generation): Semantic search, historical memory, and context-aware recommendations using ChromaDB.
-Document Analysis: AI-powered risk detection and categorization from PDF, TXT, and DOCX files, with UTCLLM integration.
-Interactive Dashboard: Visual risk matrix, metrics, historical tracking, and CSV export.
-Multiple File Support: Analyze and compare several documents simultaneously.
----
-
-### Architecture Overview
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend                            │
-│      ┌───────────────────────────────────────────────┐      │
-│      │  React 18 + Vite + Tailwind CSS (frontend/)  │      │
-│      │  served by nginx (Docker port 5174)           │      │
-└──────┴───────────────────────────────────────────────┘      │
-                     │  (REST API calls)                      │
-         ┌───────────▼────────────┐
-         │      Backend           │
-         │   FastAPI (backend/)   │
-         └───────────┬────────────┘
-                     │
-         ┌───────────▼────────────┐
-         │   Analytics & NLP      │
-         │   (src/analytics, nlp) │
-         └───────────┬────────────┘
-                     │
-         ┌───────────▼────────────┐
-         │   Data Storage         │
-         │   PostgreSQL 16 (DB)   │
-         │   MinIO (file storage) │
-         │   ChromaDB (vectors)   │
-         └────────────────────────┘
-Frontend: User interacts via a web interface (HTML demo or React app).
-Backend: FastAPI serves REST endpoints for document upload, analysis, and retrieval.
-Analytics/NLP: Core logic for risk analysis, RAG, and document processing.
-Data Storage: PostgreSQL (relational persistence), MinIO (file/object storage), ChromaDB (vector store for RAG).
----
-
-### Future Roadmap
-
-AI-Meeting
-
----
-
-### Database Infrastructure
-
-The system uses **PostgreSQL 16** for relational persistence and **MinIO** for object/file storage.
-
-**Services (docker-compose):**
-| Service | Port (host) | Purpose |
-|---------|-------------|---------|
-| `db` | 5433 | PostgreSQL 16 |
-| `minio` | 9000 / 9001 | MinIO API / Console |
-| `api` | 8001 | FastAPI backend |
-| `web` | 5174 | React frontend (nginx) |
-
-**Database tables (10):**
-| Table | Description |
-|-------|-------------|
-| `fmea_sessions` | Anchor for every analysis session |
-| `uploaded_files` | Metadata for uploaded files (path in MinIO) |
-| `fmea_records` | Individual failure mode rows (component, severity, RPN…) |
-| `ai_suggestions` | LLM-generated suggestions per field |
-| `suggestion_feedback` | Engineer decision on each suggestion (ML training data) |
-| `fmea_reports` | JSON/PDF snapshots of completed analyses |
-| `meetings` | Meeting sessions linked to a FMEA session |
-| `meeting_transcripts` | STT output for meetings |
-| `meeting_fmea_links` | Maps transcript segments to FMEA records |
-| `agent_telemetry` | Latency, token usage, errors per LLM call |
-
-**Running migrations (first time):**
 ```powershell
 $env:DATABASE_URL="postgresql+asyncpg://fmea:fmea_secret@localhost:5433/fmea_db"
-.\venv\Scripts\python.exe -m alembic revision --autogenerate -m "initial schema"
 .\venv\Scripts\python.exe -m alembic upgrade head
 ```
 
-> **Status:** Migration applied — all 10 tables created in PostgreSQL.
-> Persistence endpoints (`POST /sessions`, `GET /sessions`, etc.) are the next development phase.
+---
+
+## Project Structure
+
+```text
+FMEA_AI/
+├── backend/                       # FastAPI backend application
+│   ├── agents/                    # Specialist agent orchestration
+│   ├── services/                  # Extraction, indexing, and related services
+│   ├── Dockerfile                 # Backend container image
+│   ├── database.py                # Async engine and session factory
+│   ├── main.py                    # API entry point
+│   ├── models.py                  # SQLAlchemy ORM models
+│   ├── schemas.py                 # Pydantic request/response models
+│   └── storage.py                 # MinIO storage helpers
+├── frontend/                      # React frontend
+├── migrations/                    # Alembic migrations
+├── src/                           # Analytics, NLP, preprocessing, vector store, visualization
+├── Books/                         # Reference books used for retrieval
+├── Standards/                     # Standards documents used as normative references
+├── data/                          # Sample data and Chroma persistence
+├── tests/                         # Test suite
+├── translations/                  # i18n resources (en, fr, pt-br)
+├── docker-compose.yml             # Full local stack
+├── pyproject.toml                 # Python project configuration
+├── poetry.lock                    # Locked Python dependencies
+└── requirements.txt               # pip fallback dependency file
+```
 
 ---
 
+## Key Capabilities
 
+- FMEA extraction from PDF and Excel documents
+- Session persistence with reopening through the frontend
+- Original file persistence in MinIO
+- Editable document snapshots with explicit save flow
+- Specialist-agent suggestions for FMEA fields
+- Judge and human-review persistence in `ai_suggestions`
+- Book indexing infrastructure for future Stage 2 retrieval workflows
+- Multilingual support in English, French, and Brazilian Portuguese
 
-### Tech Stack
+---
 
-**Core:**
+## Architecture Overview
+
+```text
+Frontend (React/Vite or nginx-served build)
+    |
+    v
+FastAPI backend
+    |
+    +-- PostgreSQL 16   (sessions, records, suggestions, feedback, telemetry)
+    +-- MinIO           (uploaded files and future generated artifacts)
+    +-- ChromaDB        (reference-book retrieval store)
+    +-- NLP/analytics   (extraction, risk analysis, supporting utilities)
+```
+
+---
+
+## Tech Stack
+
+### Core
+
 - Python 3.11+
-- FastAPI (backend REST API + SSE streaming)
-- React 18 + Vite 5 + Tailwind CSS 3 (frontend — compiled, served by nginx)
-- Docker + Docker Compose (containerization)
-- UTCLLM / OpenAI-compatible API (LLM integration)
+- FastAPI
+- React 18
+- Vite 5
+- Tailwind CSS 3
+- Docker and Docker Compose
+- OpenAI-compatible UTC LLM integration
 
-**NLP / ML:**
-- Sentence Transformers (embeddings)
-- PyMuPDF (PDF extraction)
-- OpenAI client (LLM calls)
+### Data and AI
 
-**Data:**
-- PostgreSQL 16 (relational persistence — sessions, records, AI suggestions, feedback)
-- MinIO (object storage — uploaded files, generated reports, audio/video)
-- ChromaDB (vector store for RAG)
-- SQLAlchemy ≥2.0 + asyncpg (async ORM)
-- Alembic (database migrations)
-- Pandas + openpyxl (Excel processing)
+- SQLAlchemy 2.x
+- Alembic
+- asyncpg
+- PostgreSQL 16
+- MinIO
+- ChromaDB
+- PyMuPDF
+- Pandas
+- openpyxl
+- Torch CPU-only
 
-**Dev:**
-- Poetry (dependency management)
-- pytest (tests)
+### Development
+
+- Poetry
+- pytest
+
+---
+
+## Current Direction
+
+The repository already supports persistence for sessions, uploaded files, extracted records, and edited document snapshots. Retrieval infrastructure for `Books/` is present, while richer multi-source retrieval and faithfulness validation are planned next steps.
 
 ---
 
