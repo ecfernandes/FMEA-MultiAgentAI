@@ -209,6 +209,32 @@ class AgentResponse(BaseModel):
     )
 
 
+class DocumentDiagnosticSample(BaseModel):
+    """Representative extracted snippet from a source PDF page."""
+
+    page: int = Field(..., description="Source page number")
+    chars: int = Field(..., description="How many characters were extracted from the page")
+    used_ocr: bool = Field(..., description="Whether OCR was needed for this page")
+    snippet: str = Field(..., description="Short preview of the extracted text")
+
+
+class DocumentDiagnosticResponse(BaseModel):
+    """Extraction diagnostics for one source PDF."""
+
+    book_file: str = Field(..., description="Filename inspected in Books/ or Standards/")
+    exists: bool = Field(..., description="Whether the file was found in the expected folder")
+    source_type: Optional[str] = Field(None, description="book | standard")
+    pages: Optional[int] = Field(None, description="Total page count in the PDF")
+    nonempty_pages: Optional[int] = Field(None, description="Pages with extractable text")
+    total_chars: Optional[int] = Field(None, description="Total extracted characters across the document")
+    ocr_pages: Optional[int] = Field(None, description="Pages that required OCR fallback")
+    ocr_available: Optional[bool] = Field(None, description="Whether OCR fallback is available in this environment")
+    samples: List[DocumentDiagnosticSample] = Field(
+        default_factory=list,
+        description="Small extraction samples to inspect text quality",
+    )
+
+
 # ============================================================================
 # MISSING FAILURES ANALYSIS
 # ============================================================================

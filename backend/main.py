@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +34,7 @@ from sqlalchemy.orm import selectinload
 from backend.schemas import (
     AgentRequest,
     AgentResponse,
+    DocumentDiagnosticResponse,
     ExtractionResponse,
     FMEADocumentSchema,
     HealthResponse,
@@ -460,9 +461,12 @@ async def analyze_field(
     summary = "Get indexing status for each reference book",
 )
 async def books_status():
-    """Returns how many chunks are stored per book in ChromaDB."""
-    from backend.services.book_indexer import books_index_status
-    return {"status": books_index_status()}
+    """Returns how many chunks are stored per book and per standard in the local vector index."""
+    from backend.services.book_indexer import books_index_status, standards_index_status
+    return {
+        "books": books_index_status(),
+        "standards": standards_index_status(),
+    }
 
 
 @app.post(
@@ -471,7 +475,7 @@ async def books_status():
     summary = "Index (or re-index) all books and standards reference PDFs",
     description = (
         "Reads every PDF in `Books/` and `Standards/`, extracts text page-by-page, "
-        "splits into chunks and stores them in ChromaDB (`fmea_books` collection).\n\n"
+        "splits into chunks and stores them in dedicated local vector indexes for books and standards.\n\n"
         "Already-indexed chunks are skipped — safe to run repeatedly.\n\n"
         "**This only needs to be run once** (or when new books are added)."
     ),
@@ -495,6 +499,29 @@ async def index_books():
         }
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Indexing failed: {exc}")
+
+
+@app.get(
+    "/index/books/diagnostics",
+    response_model = DocumentDiagnosticResponse,
+    tags           = ["Knowledge Base"],
+    summary        = "Inspect extraction quality for one reference PDF",
+    description    = (
+        "Checks whether a specific PDF has extractable text before or after indexing. "
+        "Useful to detect scanned/image-only PDFs that would produce few or zero chunks."
+    ),
+)
+async def document_diagnostics(
+    filename: str = Query(..., description="Exact PDF filename located in Books/ or Standards/"),
+    source_type: str | None = Query(default=None, description="Optional hint: book | standard"),
+):
+    """Return extraction diagnostics for a single reference document."""
+    from backend.services.book_indexer import diagnose_document_extraction
+
+    diagnostic = diagnose_document_extraction(filename, source_type)
+    if not diagnostic.get("exists"):
+        raise HTTPException(status_code=404, detail=f"Reference PDF not found: {filename}")
+    return diagnostic
 
 
 # ============================================================================
