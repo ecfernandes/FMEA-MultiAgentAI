@@ -423,6 +423,12 @@ async def analyze_field(
                 suggested_value        = row.suggested_value,
                 justification          = row.justification or "",
                 sources                = sources,
+                references             = row.prompt_context.get("references", []) if row.prompt_context else [],
+                retrieval_query        = row.prompt_context.get("retrieval_query") if row.prompt_context else None,
+                faithfulness_score     = row.prompt_context.get("faithfulness_score") if row.prompt_context else None,
+                faithfulness_verdict   = row.prompt_context.get("faithfulness_verdict") if row.prompt_context else None,
+                faithfulness_notes     = row.prompt_context.get("faithfulness_notes") if row.prompt_context else [],
+                retry_count            = row.prompt_context.get("retry_count", 0) if row.prompt_context else 0,
                 judge_verdict          = row.judge_verdict,
                 judge_correct_points   = row.judge_correct_points or [],
                 judge_incorrect_points = row.judge_incorrect_points or [],
@@ -462,21 +468,26 @@ async def books_status():
 @app.post(
     "/index/books",
     tags    = ["Knowledge Base"],
-    summary = "Index (or re-index) all books in the Books/ folder",
+    summary = "Index (or re-index) all books and standards reference PDFs",
     description = (
-        "Reads every PDF in `Books/`, extracts text page-by-page, splits into "
-        "chunks and stores them in ChromaDB (`fmea_books` collection).\n\n"
+        "Reads every PDF in `Books/` and `Standards/`, extracts text page-by-page, "
+        "splits into chunks and stores them in ChromaDB (`fmea_books` collection).\n\n"
         "Already-indexed chunks are skipped — safe to run repeatedly.\n\n"
         "**This only needs to be run once** (or when new books are added)."
     ),
 )
 async def index_books():
-    """Index all reference books into ChromaDB for RAG retrieval."""
-    from backend.services.book_indexer import index_all_books
+    """Index all reference books and standards into ChromaDB for retrieval."""
+    from backend.services.book_indexer import index_all_books, index_all_standards
     loop = asyncio.get_event_loop()
     try:
-        results = await loop.run_in_executor(None, index_all_books)
-        total   = sum(results.values())
+        book_results = await loop.run_in_executor(None, index_all_books)
+        standard_results = await loop.run_in_executor(None, index_all_standards)
+        results = {
+            "books": book_results,
+            "standards": standard_results,
+        }
+        total = sum(book_results.values()) + sum(standard_results.values())
         return {
             "success":      True,
             "total_chunks": total,
@@ -1221,6 +1232,12 @@ async def save_suggestion(
             "current_value": body.current_value,
             "agent_color": body.agent_color,
             "sources": body.sources or [],
+            "references": [ref.model_dump() for ref in (body.references or [])],
+            "retrieval_query": body.retrieval_query,
+            "faithfulness_score": body.faithfulness_score,
+            "faithfulness_verdict": body.faithfulness_verdict,
+            "faithfulness_notes": body.faithfulness_notes,
+            "retry_count": body.retry_count,
         },
         judge_verdict=body.judge_verdict,
         judge_correct_points=body.judge_correct_points,

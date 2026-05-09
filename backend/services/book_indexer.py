@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import fitz  # PyMuPDF
 
@@ -31,6 +32,7 @@ from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 # ── Paths ────────────────────────────────────────────────────────────────────
 _ROOT          = Path(__file__).parent.parent.parent          # project root
 BOOKS_PATH     = _ROOT / "Books"
+STANDARDS_PATH = _ROOT / "Standards"
 VECTOR_STORE   = _ROOT / "data" / "vector_store"
 COLLECTION_NAME = "fmea_books"
 CHUNK_MAX_CHARS = 1500   # ~300 tokens — good balance for retrieval precision
@@ -84,6 +86,21 @@ def _collection():
     return _col_singleton
 
 
+def _resolve_pdf_path(filename: str) -> Path | None:
+    for root in (BOOKS_PATH, STANDARDS_PATH):
+        candidate = root / filename
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _source_type_for(filename: str) -> str:
+    path = _resolve_pdf_path(filename)
+    if path is None:
+        return "unknown"
+    return "standard" if path.parent == STANDARDS_PATH else "book"
+
+
 # ============================================================================
 # PUBLIC API
 # ============================================================================
@@ -99,7 +116,7 @@ def index_book(book_filename: str, col=None) -> int:
     Returns:
         Number of new chunks added (0 if book not found or already fully indexed).
     """
-    path = BOOKS_PATH / book_filename
+    path = _resolve_pdf_path(book_filename)
     if not path.exists():
         return 0
 
@@ -118,7 +135,14 @@ def index_book(book_filename: str, col=None) -> int:
         for ci, chunk in enumerate(_chunk_page(text)):
             chunk_id = f"{book_filename}::p{page_num}::c{ci}"
             documents.append(chunk)
-            metadatas.append({"book_file": book_filename, "page_num": page_num})
+            metadatas.append(
+                {
+                    "book_file": book_filename,
+                    "page_num": page_num,
+                    "chunk_index": ci,
+                    "source_type": _source_type_for(book_filename),
+                }
+            )
             ids.append(chunk_id)
 
     doc.close()
@@ -170,6 +194,31 @@ def index_all_books(books_path: str | None = None) -> dict[str, int]:
     return results
 
 
+def index_all_standards(standards_path: str | None = None) -> dict[str, int]:
+    """
+    Index every PDF in the Standards/ folder.
+
+    Returns:
+        {filename: chunks_added} for each standard found.
+    """
+    root = Path(standards_path) if standards_path else STANDARDS_PATH
+    col = _collection()
+    pdfs = sorted(root.glob("*.pdf"))
+    total = len(pdfs)
+    results: dict[str, int] = {}
+    for idx, pdf in enumerate(pdfs, start=1):
+        print(f"[RAG] ({idx}/{total}) Indexing standard {pdf.name} ...", flush=True)
+        try:
+            n = index_book(pdf.name, col)
+            results[pdf.name] = n
+            print(f"[RAG]   -> {n} chunks added", flush=True)
+        except Exception as exc:
+            print(f"[RAG]   -> ERROR: {exc}", flush=True)
+            results[pdf.name] = 0
+    print(f"[RAG] Done. Total standards: {total}", flush=True)
+    return results
+
+
 def retrieve_book_context(
     query:         str,
     book_filename: str,
@@ -200,6 +249,56 @@ def retrieve_book_context(
         return res["documents"][0] if res.get("documents") else []
     except Exception:
         return []
+
+
+def retrieve_book_context_with_metadata(
+    query: str,
+    book_filename: str,
+    n_results: int = 3,
+) -> list[dict[str, Any]]:
+    """
+    Retrieve the top-n relevant chunks from a specific document with metadata.
+
+    Returns a list of dictionaries containing the chunk text and reference info.
+    """
+    try:
+        col = _collection()
+        count = col.count()
+        if count == 0:
+            return []
+        res = col.query(
+            query_texts=[query],
+            n_results=min(n_results, count),
+            where={"book_file": book_filename},
+        )
+        docs = res.get("documents", [[]])
+        metas = res.get("metadatas", [[]])
+        ids = res.get("ids", [[]])
+        distances = res.get("distances", [[]])
+        rows: list[dict[str, Any]] = []
+        for idx, text in enumerate(docs[0] if docs else []):
+            meta = metas[0][idx] if metas and metas[0] and idx < len(metas[0]) else {}
+            rows.append(
+                {
+                    "text": text,
+                    "book_file": meta.get("book_file", book_filename),
+                    "page_num": meta.get("page_num"),
+                    "chunk_index": meta.get("chunk_index"),
+                    "chunk_id": ids[0][idx] if ids and ids[0] and idx < len(ids[0]) else None,
+                    "source_type": meta.get("source_type", _source_type_for(book_filename)),
+                    "distance": distances[0][idx] if distances and distances[0] and idx < len(distances[0]) else None,
+                }
+            )
+        return rows
+    except Exception:
+        return []
+
+
+def list_standard_documents() -> list[str]:
+    """Return all PDF filenames currently available in Standards/."""
+    if not STANDARDS_PATH.exists():
+        return []
+    return sorted(pdf.name for pdf in STANDARDS_PATH.glob("*.pdf"))
 
 
 def books_index_status() -> dict[str, int]:

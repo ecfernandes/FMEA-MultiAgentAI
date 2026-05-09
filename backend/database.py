@@ -26,8 +26,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from backend.models import Base
-
 # ---------------------------------------------------------------------------
 # Engine — created once at module import time
 # ---------------------------------------------------------------------------
@@ -101,16 +99,3 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
-
-# ---------------------------------------------------------------------------
-# Startup helper — called from main.py lifespan
-# ---------------------------------------------------------------------------
-
-async def create_tables() -> None:
-    """
-    Creates all tables that do not yet exist.
-    In production use Alembic migrations instead; this is a fallback for
-    development environments where Alembic has not been run yet.
-    """
-    async with get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)

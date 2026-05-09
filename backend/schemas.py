@@ -144,6 +144,16 @@ class AgentRequest(BaseModel):
     )
 
 
+class ReferenceItem(BaseModel):
+    """Structured evidence reference returned by retrieval-enabled agent flows."""
+
+    label: str = Field(..., description="Human-readable reference label")
+    source_type: str = Field(..., description="book | standard")
+    file_name: str = Field(..., description="Document filename used as evidence")
+    page_num: Optional[int] = Field(None, description="Source page number when available")
+    chunk_id: Optional[str] = Field(None, description="Unique chunk identifier in the vector store")
+
+
 class AgentResponse(BaseModel):
     """Structured response from a specialist agent."""
 
@@ -157,6 +167,30 @@ class AgentResponse(BaseModel):
     sources: List[str] = Field(
         default_factory=list,
         description="Reference books / standards used by the agent",
+    )
+    references: List[ReferenceItem] = Field(
+        default_factory=list,
+        description="Structured evidence references used during retrieval",
+    )
+    retrieval_query: Optional[str] = Field(
+        None,
+        description="Semantic retrieval query generated for Stage 2 context lookup",
+    )
+    faithfulness_score: Optional[float] = Field(
+        None,
+        description="Faithfulness score 0.0 to 1.0 comparing the answer against retrieved evidence",
+    )
+    faithfulness_verdict: Optional[str] = Field(
+        None,
+        description="pass | review | fail based on the retrieved evidence consistency check",
+    )
+    faithfulness_notes: Optional[List[str]] = Field(
+        None,
+        description="Notes explaining the faithfulness evaluation result",
+    )
+    retry_count: int = Field(
+        0,
+        description="How many retrieval/agent retries were needed before returning the response",
     )
 
     # LLM-as-Judge evaluation fields (None when judge call fails)
@@ -320,6 +354,12 @@ class SaveSuggestionRequest(BaseModel):
     agent_name: Optional[str] = None
     agent_color: Optional[str] = None
     sources: Optional[List[str]] = None
+    references: Optional[List[ReferenceItem]] = None
+    retrieval_query: Optional[str] = None
+    faithfulness_score: Optional[float] = None
+    faithfulness_verdict: Optional[str] = None
+    faithfulness_notes: Optional[List[str]] = None
+    retry_count: Optional[int] = None
     judge_verdict: Optional[str] = None
     judge_correct_points: Optional[List[str]] = None
     judge_incorrect_points: Optional[List[str]] = None

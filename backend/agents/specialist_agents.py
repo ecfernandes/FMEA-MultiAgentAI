@@ -18,11 +18,12 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Optional
+from typing import Any, Optional
 
 from openai import AsyncOpenAI
 
-from backend.schemas import AgentRequest, AgentResponse
+from backend.schemas import AgentRequest, AgentResponse, ReferenceItem
+from backend.services.book_indexer import list_standard_documents, retrieve_book_context_with_metadata
 
 
 # ============================================================================
@@ -233,6 +234,17 @@ _FIELD_LABEL: dict = {
 }
 
 _FIELD_IS_NUMERIC = {"severity", "occurrence", "detection"}
+_FIELD_STANDARD_PRIORITY = {
+    "severity": "high",
+    "occurrence": "high",
+    "detection": "high",
+    "recommended_action": "high",
+    "current_controls_prevention": "high",
+    "current_controls_detection": "high",
+    "cause": "medium",
+    "effect": "medium",
+    "failure_mode": "medium",
+}
 
 BOOKS_PATH = "Books/"
 
@@ -300,7 +312,7 @@ _JUDGE_SYSTEM_PROMPT = (
     '  "correct"   — all points valid, no inconsistencies\n'
     '  "partial"   — majority valid but at least one incoherent statement\n'
     '  "incorrect" — fundamentally incoherent with component or failure mode\n\n'
-    "Reference always applicable: Renault Standard - Design And Process FMEA\n\n"
+    "Reference always applicable: the active enterprise standards corpus\n\n"
     "RULES:\n"
     "- Evaluate technical coherence, not writing style\n"
     "- Flag statements contradicting the physical nature of the component\n"
@@ -318,6 +330,7 @@ async def _judge_response(
     agent_name: str,
     suggested_value: Optional[str | int],
     justification: str,
+    evidence_summary: str,
     api_key: str,
     model: str,
     base_url: str,
@@ -337,7 +350,8 @@ async def _judge_response(
         f"Specialist selected: {agent_name}\n"
         f"AI-generated assessment: {suggested_value}\n"
         f"Justification provided: {justification}\n"
-        "Reference standard: Renault Standard - Design And Process FMEA\n"
+        f"Retrieved evidence summary: {evidence_summary}\n"
+        "Reference standard: active enterprise standards corpus\n"
         "Evaluate technical coherence with the component and failure mode described."
     )
 
@@ -449,6 +463,7 @@ async def _call_specialist_agent(
     api_key: str,
     base_url: str,
     model: str,
+    retrieval_bundle: dict[str, Any] | None = None,
 ) -> tuple[Optional[str | int], str]:
     """
     Call the specialist LLM and return (suggested_value, justification).
@@ -459,10 +474,25 @@ async def _call_specialist_agent(
     book_domain = spec["description"]
     field_label = _FIELD_LABEL.get(request.field, request.field.replace("_", " ").title())
     is_numeric  = request.field in _FIELD_IS_NUMERIC
+    retrieval_bundle = retrieval_bundle or {}
+    specialist_evidence = retrieval_bundle.get("specialist_evidence", [])
+    standards_evidence = retrieval_bundle.get("standards_evidence", [])
+    field_rules = retrieval_bundle.get("field_rules", [])
+
+    specialist_context = "\n".join(
+        f"- {item['book_file']} p.{item.get('page_num', '?')}: {item['text']}"
+        for item in specialist_evidence
+    ) or "- No specialist-book evidence retrieved"
+    standards_context = "\n".join(
+        f"- {item['book_file']} p.{item.get('page_num', '?')}: {item['text']}"
+        for item in standards_evidence
+    ) or "- No standards evidence retrieved"
+    field_rules_text = "\n".join(f"- {rule}" for rule in field_rules) or "- No explicit field-specific rules extracted"
 
     system_prompt = (
         f"You are a senior FMEA engineer. Your domain of expertise: {book_domain}\n"
         f"Reference document: {book_file}\n\n"
+        "You must ground your response in the retrieved evidence and applicable enterprise standards.\n\n"
         'Return a valid JSON object with exactly these two keys:\n'
         '  "suggested_value": '
         + (
@@ -475,6 +505,8 @@ async def _call_specialist_agent(
         '- Do NOT write "Based on the book", "According to", "The agent suggests", "As per..."\n'
         "- Write as a direct engineering technical verdict in first person\n"
         "- Cite quantitative data where applicable (failure rates, stress limits, detection thresholds)\n"
+        "- Respect mandatory compliance and enterprise-standard constraints when they apply\n"
+        "- If specialist evidence and standards evidence conflict, prioritise the standards constraints\n"
         "- Every sentence must carry technical content — no padding\n"
         "- Return ONLY the raw JSON object — no markdown fences, no commentary"
     )
@@ -483,7 +515,14 @@ async def _call_specialist_agent(
         f"Part / component context: {request.context}\n"
         f"Item function: {request.function}\n"
         f"Failure mode: {request.failure_mode}\n"
-        f"\nProvide your expert assessment for the FMEA field: {field_label}"
+        f"FMEA field to assess: {field_label}\n\n"
+        "Engineering context from the specialist reference:\n"
+        f"{specialist_context}\n\n"
+        "Applicable enterprise standards context:\n"
+        f"{standards_context}\n\n"
+        "Mandatory compliance / field rules:\n"
+        f"{field_rules_text}\n\n"
+        "Provide your expert assessment now."
     )
 
     val: Optional[str | int] = None
@@ -543,6 +582,194 @@ async def _call_specialist_agent(
     return val, justification
 
 
+def _build_retrieval_query(request: AgentRequest) -> str:
+    parts = [
+        f"FMEA field: {request.field}",
+        f"Function: {request.function}",
+        f"Failure mode: {request.failure_mode}",
+    ]
+    if request.context.strip():
+        parts.append(f"Context: {request.context}")
+    return " | ".join(parts)
+
+
+def _extract_field_rules(field: str, standard_chunks: list[dict[str, Any]]) -> list[str]:
+    if not standard_chunks:
+        return []
+
+    patterns: dict[str, list[str]] = {
+        "severity": ["severity", "safety", "critical", "hazard", "customer"],
+        "occurrence": ["occurrence", "frequency", "rate", "repeat", "reliability"],
+        "detection": ["detection", "inspection", "monitor", "detect", "control"],
+        "recommended_action": ["action", "prevent", "detection", "mitigation", "corrective"],
+        "current_controls_prevention": ["prevention", "prevent", "design control", "avoid"],
+        "current_controls_detection": ["detection", "detect", "inspection", "monitoring"],
+        "cause": ["cause", "mechanism", "root cause"],
+        "effect": ["effect", "customer", "system", "impact"],
+        "failure_mode": ["failure mode", "mode", "defect", "malfunction"],
+    }
+    keywords = patterns.get(field, [field.replace("_", " ")])
+    rules: list[str] = []
+    for chunk in standard_chunks:
+        text = chunk.get("text", "")
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        for sentence in sentences:
+            lowered = sentence.lower()
+            if any(keyword in lowered for keyword in keywords):
+                cleaned = sentence.strip()
+                if cleaned and cleaned not in rules:
+                    rules.append(cleaned)
+            if len(rules) >= 5:
+                return rules
+    return rules
+
+
+def _retrieve_stage2_context(request: AgentRequest, agent_name: str) -> dict[str, Any]:
+    query = _build_retrieval_query(request)
+    spec = SPECIALIST_MAP[agent_name]
+    specialist_doc = spec["file"]
+    standard_docs = list_standard_documents()
+
+    specialist_limit = 4
+    standards_limit = 4 if _FIELD_STANDARD_PRIORITY.get(request.field) == "high" else 2
+
+    specialist_evidence = retrieve_book_context_with_metadata(
+        query,
+        specialist_doc,
+        n_results=specialist_limit,
+    )
+
+    standards_evidence: list[dict[str, Any]] = []
+    for standard_doc in standard_docs:
+        standards_evidence.extend(
+            retrieve_book_context_with_metadata(query, standard_doc, n_results=standards_limit)
+        )
+
+    field_rules = _extract_field_rules(request.field, standards_evidence)
+    references = [
+        {
+            "label": f"{item['book_file']} p.{item.get('page_num', '?')}",
+            "source_type": item.get("source_type", "book"),
+            "file_name": item.get("book_file", "unknown"),
+            "page_num": item.get("page_num"),
+            "chunk_id": item.get("chunk_id"),
+        }
+        for item in [*specialist_evidence, *standards_evidence]
+    ]
+    unique_references: list[dict[str, Any]] = []
+    seen = set()
+    for ref in references:
+        key = (ref["file_name"], ref.get("page_num"), ref.get("chunk_id"))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_references.append(ref)
+
+    sources = []
+    for ref in unique_references:
+        label = ref["label"]
+        if label not in sources:
+            sources.append(label)
+
+    evidence_summary = "; ".join(sources) if sources else "No retrieval evidence available"
+    return {
+        "query": query,
+        "specialist_evidence": specialist_evidence,
+        "standards_evidence": standards_evidence,
+        "field_rules": field_rules,
+        "references": unique_references,
+        "sources": sources,
+        "evidence_summary": evidence_summary,
+    }
+
+
+async def _evaluate_faithfulness(
+    *,
+    request: AgentRequest,
+    suggested_value: Optional[str | int],
+    justification: str,
+    retrieval_bundle: dict[str, Any],
+    api_key: str,
+    model: str,
+    base_url: str,
+) -> dict[str, Any]:
+    evidence_text = "\n".join(
+        f"- {item['book_file']} p.{item.get('page_num', '?')}: {item['text']}"
+        for item in [
+            *retrieval_bundle.get("specialist_evidence", []),
+            *retrieval_bundle.get("standards_evidence", []),
+        ]
+    ) or "- No evidence retrieved"
+    field_rules = retrieval_bundle.get("field_rules", [])
+    rules_text = "\n".join(f"- {rule}" for rule in field_rules) or "- No explicit field rules extracted"
+
+    system_prompt = (
+        "You are evaluating whether an FMEA answer is faithful to the retrieved evidence.\n\n"
+        "Return JSON with exactly three keys:\n"
+        '  "score": float 0.0 to 1.0\n'
+        '  "verdict": "pass" | "review" | "fail"\n'
+        '  "notes": ["concise evidence-grounded observations"]\n\n'
+        "Use 'pass' for evidence-grounded answers, 'review' for partially supported answers, and 'fail' for unsupported or contradictory answers.\n"
+        "Return ONLY raw JSON."
+    )
+    user_prompt = (
+        f"Function: {request.function}\n"
+        f"Failure mode: {request.failure_mode}\n"
+        f"Field: {request.field}\n"
+        f"Suggested value: {suggested_value}\n"
+        f"Justification: {justification}\n\n"
+        f"Retrieved evidence:\n{evidence_text}\n\n"
+        f"Field rules:\n{rules_text}"
+    )
+
+    fallback = {"score": 0.5, "verdict": "review", "notes": ["Faithfulness evaluation unavailable"]}
+    try:
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            max_tokens=250,
+        )
+        raw = response.choices[0].message.content.strip()
+        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        if raw.endswith("```"):
+            raw = raw[: raw.rfind("```")].strip()
+        if not raw.startswith("{"):
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if match:
+                raw = match.group(0)
+        parsed = json.loads(raw)
+        score = float(parsed.get("score", 0.5))
+        verdict = parsed.get("verdict", "review")
+        if verdict not in {"pass", "review", "fail"}:
+            verdict = "review"
+        notes = parsed.get("notes", []) or []
+        return {"score": max(0.0, min(1.0, score)), "verdict": verdict, "notes": notes}
+    except Exception:
+        return fallback
+
+
+def _retry_with_refined_context(request: AgentRequest, notes: list[str], retry_count: int) -> AgentRequest:
+    note_text = " ".join(notes).strip()
+    if not note_text:
+        note_text = "Previous attempt was weakly supported by retrieved evidence."
+    refined_context = request.context.strip()
+    if refined_context:
+        refined_context = f"{refined_context} | Retry {retry_count}: {note_text}"
+    else:
+        refined_context = f"Retry {retry_count}: {note_text}"
+    return request.model_copy(update={"context": refined_context})
+
+
 async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
     """
     Select the best-matching specialist, call it, then run the LLM-as-Judge.
@@ -567,18 +794,48 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
     base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
     model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
 
+    working_request = request
+    retry_count = 0
+    retrieval_bundle = _retrieve_stage2_context(working_request, agent_name)
     val, justification = await _call_specialist_agent(
-        agent_name, request, api_key, base_url, model
+        agent_name, working_request, api_key, base_url, model, retrieval_bundle
+    )
+    faithfulness = await _evaluate_faithfulness(
+        request=working_request,
+        suggested_value=val,
+        justification=justification,
+        retrieval_bundle=retrieval_bundle,
+        api_key=api_key,
+        model=model,
+        base_url=base_url,
     )
 
+    while faithfulness["verdict"] == "fail" and retry_count < 2:
+        retry_count += 1
+        working_request = _retry_with_refined_context(working_request, faithfulness.get("notes", []), retry_count)
+        retrieval_bundle = _retrieve_stage2_context(working_request, agent_name)
+        val, justification = await _call_specialist_agent(
+            agent_name, working_request, api_key, base_url, model, retrieval_bundle
+        )
+        faithfulness = await _evaluate_faithfulness(
+            request=working_request,
+            suggested_value=val,
+            justification=justification,
+            retrieval_bundle=retrieval_bundle,
+            api_key=api_key,
+            model=model,
+            base_url=base_url,
+        )
+
     judge = await _judge_response(
-        context         = request.context,
-        function        = request.function,
-        failure_mode    = request.failure_mode,
+        context         = working_request.context,
+        function        = working_request.function,
+        failure_mode    = working_request.failure_mode,
         field_label     = field_label,
         agent_name      = agent_name,
         suggested_value = val,
         justification   = justification,
+        evidence_summary= retrieval_bundle.get("evidence_summary", "No evidence summary available"),
         api_key         = api_key,
         model           = model,
         base_url        = base_url,
@@ -586,8 +843,15 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
 
     if judge["verdict"] == "incorrect":
         # Retry once — reclassify as partial so the response is never silently blocked
+        retry_count += 1
+        working_request = _retry_with_refined_context(
+            working_request,
+            judge.get("incorrect_points", []) or ["Judge flagged the answer as incorrect"],
+            retry_count,
+        )
+        retrieval_bundle = _retrieve_stage2_context(working_request, agent_name)
         val, justification = await _call_specialist_agent(
-            agent_name, request, api_key, base_url, model
+            agent_name, working_request, api_key, base_url, model, retrieval_bundle
         )
         judge["verdict"] = "partial"
         if not judge["incorrect_points"]:
@@ -600,7 +864,13 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
         agent_color            = _AGENT_COLORS.get(agent_name, "#6b7280"),
         suggested_value        = val,
         justification          = justification,
-        sources                = [book_file, "Renault Standard - Design And Process FMEA"],
+        sources                = retrieval_bundle.get("sources", [book_file]),
+        references             = [ReferenceItem(**ref) for ref in retrieval_bundle.get("references", [])],
+        retrieval_query        = retrieval_bundle.get("query"),
+        faithfulness_score     = faithfulness.get("score"),
+        faithfulness_verdict   = faithfulness.get("verdict"),
+        faithfulness_notes     = faithfulness.get("notes", []),
+        retry_count            = retry_count,
         judge_verdict          = judge["verdict"],
         judge_correct_points   = judge.get("correct_points", []),
         judge_incorrect_points = judge.get("incorrect_points", []),
