@@ -274,6 +274,13 @@ def _candidate_models(preferred_model: str | None) -> list[str]:
     return models
 
 
+def _utc_openai_compatible_base_url(base_url: str) -> str:
+    if "ia.beta.utc.fr" not in base_url:
+        return base_url
+    origin = base_url.split("/api/", 1)[0].rstrip("/")
+    return f"{origin}/ollama/v1"
+
+
 async def _chat_content(
     *,
     api_key: str,
@@ -851,7 +858,7 @@ async def _evaluate_faithfulness(
     try:
         ragas_llm = llm_factory(
             model,
-            client=AsyncOpenAI(api_key=api_key, base_url=base_url),
+            client=AsyncOpenAI(api_key=api_key, base_url=_utc_openai_compatible_base_url(base_url)),
         )
         faithfulness_metric = Faithfulness(llm=ragas_llm)
         groundedness_metric = ResponseGroundedness(llm=ragas_llm)
