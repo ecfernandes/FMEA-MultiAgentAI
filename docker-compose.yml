@@ -53,7 +53,7 @@ services:
       - "8001:8000"
     environment:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://ia.beta.utc.fr/api/v1}
-      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-RedHatAI/Qwen3.6-35B-A3B-NVFP4}
+      - LLM_DEFAULT_MODEL=${LLM_DEFAULT_MODEL:-mistral-small3.2:latest}
       - UTCLLM_API_KEY=${UTCLLM_API_KEY}
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-fmea}:${POSTGRES_PASSWORD:-fmea_secret}@db:5432/${POSTGRES_DB:-fmea_db}
       - MINIO_ENDPOINT=minio:9000

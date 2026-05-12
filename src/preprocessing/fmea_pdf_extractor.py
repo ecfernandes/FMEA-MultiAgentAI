@@ -21,6 +21,20 @@ from pydantic import BaseModel, Field
 from src.preprocessing.fmea_schema import FMEADocument, FMEARecord
 
 
+_DEFAULT_MODEL_FALLBACKS = [
+    "mistral-small3.2:latest",
+    "RedHatAI/Qwen3.6-35B-A3B-NVFP4",
+    "glm-4.7-flash:latest",
+    "gemma4:31b",
+    "devstral-small-2:latest",
+    "hf.co/unsloth/Magistral-Small-2509-GGUF:UD-Q4_K_XL",
+    "hf.co/unsloth/Olmo-3.1-32B-Instruct-GGUF:Q4_K_M",
+    "hf.co/unsloth/Olmo-3.1-32B-Think-GGUF:Q4_K_M",
+    "qwen3527b-no-think",
+    "ministral-3:3b",
+]
+
+
 # ============================================================================
 # PYDANTIC CONTRACT — "the shape the LLM must return"
 # ============================================================================
@@ -445,7 +459,7 @@ def extract_fmea_page(
         (columns, records, last_fn, part_name, supplier)
         part_name / supplier are None for pages 2+.
     """
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
 
     if not known_columns:
         # First page — full discovery; choose prompt based on format
@@ -502,7 +516,7 @@ def _discover_columns_from_pages(
     Returns (best_columns, part_name, supplier, best_page_idx).
     """
     import json as _json
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
     best_columns: List[str] = []
     part_name = "Unknown"
     supplier  = "Unknown"
@@ -658,17 +672,71 @@ def _call_llm_for_json(
     _timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", str(timeout)))
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=_timeout, max_retries=1)
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[
-            {"role": "system", "content": system_msg},
-            {"role": "user",   "content": user_msg},
-        ],
-        temperature=0.0,
-        max_tokens=max_tokens,
-    )
+    def _call_openai_compatible() -> str:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_msg},
+                {"role": "user",   "content": user_msg},
+            ],
+            temperature=0.0,
+            max_tokens=max_tokens,
+        )
 
-    raw = response.choices[0].message.content.strip()
+        message = response.choices[0].message
+        content = message.content
+        if content is None:
+            refusal = getattr(message, "refusal", None)
+            raise ValueError(
+                "LLM returned no text content"
+                + (f": {refusal}" if refusal else "")
+            )
+        return content
+
+    def _call_utc_ollama() -> str:
+        import requests
+
+        origin = base_url.split("/api/", 1)[0].rstrip("/")
+        response = requests.post(
+            f"{origin}/ollama/api/chat",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system_msg},
+                    {"role": "user", "content": user_msg},
+                ],
+                "stream": False,
+                "options": {
+                    "temperature": 0.0,
+                    "num_predict": max_tokens,
+                },
+            },
+            timeout=_timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        content = (payload.get("message") or {}).get("content")
+        if content is None:
+            raise ValueError("UTC Ollama endpoint returned no text content")
+        return content
+
+    try:
+        raw = _call_openai_compatible()
+    except Exception as exc:
+        if "ia.beta.utc.fr" not in base_url:
+            raise
+        try:
+            raw = _call_utc_ollama()
+        except Exception as ollama_exc:
+            raise RuntimeError(
+                f"OpenAI-compatible call failed: {exc}; UTC Ollama fallback failed: {ollama_exc}"
+            ) from ollama_exc
+
+    raw = raw.strip()
 
     # Strip <think>...</think> blocks emitted by reasoning models (Magistral, Olmo Think, etc.)
     import re as _re
@@ -692,7 +760,7 @@ def extract_fmea_header(raw_text: str, api_key: str, model_name: str | None = No
     Legacy header-only extraction (part_name, supplier, functions list).
     Kept for backward compatibility with api.py and test suites.
     """
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
 
     system_msg = _SYSTEM_PROMPT + (
         "\n\nIMPORTANT: Return ONLY a valid JSON object with exactly these keys: "
@@ -731,8 +799,6 @@ def extract_fmea_full(
         json.JSONDecodeError: Malformed JSON from the model.
         pydantic.ValidationError: Schema mismatch.
     """
-    model = model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
-
     user_msg = (
         "Extract the complete FMEA table from the document below.\n\n"
         "---BEGIN PDF TEXT---\n"
@@ -740,50 +806,73 @@ def extract_fmea_full(
         "---END PDF TEXT---"
     )
 
-    # Allow enough output for large FMEAs (50+ rows) while staying within model limits
-    data = _call_llm_for_json(
-        _DEEP_SYSTEM_PROMPT, user_msg, api_key, model, max_tokens=4096
-    )
+    def _candidate_models() -> list[str]:
+        ordered: list[str] = []
+        if model_name:
+            ordered.append(model_name)
+        else:
+            env_model = os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
+            ordered.append(env_model)
+        for fallback in _DEFAULT_MODEL_FALLBACKS:
+            if fallback not in ordered:
+                ordered.append(fallback)
+        return ordered
 
-    # Normalise SOD fields to int / None before Pydantic validation
-    for rec in data.get("records", []):
-        for field in ("severity", "occurrence", "detection"):
-            val = rec.get(field)
-            if val is not None:
-                try:
-                    rec[field] = int(val)
-                except (ValueError, TypeError):
-                    rec[field] = None
+    last_error: Exception | None = None
+    for model in _candidate_models():
+        try:
+            # Allow enough output for large FMEAs (50+ rows) while staying within model limits
+            data = _call_llm_for_json(
+                _DEEP_SYSTEM_PROMPT, user_msg, api_key, model, max_tokens=4096
+            )
 
-    # Pre-processing: normalise alias keys to canonical names in every record
-    # (e.g. "item_function" → "function") so propagation and lookup work correctly
-    _CANON_ALIASES: dict[str, list[str]] = {
-        "function":     ["item_function", "item function", "fonction", "item",
-                         "component_function"],
-        "failure_mode": ["failure mode", "potential_failure_mode",
-                         "mode_de_defaillance", "defaillance", "falha", "modo_de_falha"],
-        "effect":       ["potential_effect", "effet", "efeito"],
-        "cause":        ["potential_cause", "root_cause", "causa"],
-    }
-    for rec in data.get("records", []):
-        for canonical, aliases in _CANON_ALIASES.items():
-            if canonical not in rec or rec[canonical] is None:
-                for alias in aliases:
-                    if alias in rec and rec[alias] is not None:
-                        rec[canonical] = rec.pop(alias)
-                        break
+            if not data.get("records"):
+                raise ValueError(f"Model {model} returned no records")
 
-    # Post-processing: propagate "function" down to rows where it is blank
-    # (handles merged-cell PDFs where only the first row of a group has the value)
-    last_fn: Optional[str] = None
-    for rec in data.get("records", []):
-        fn = rec.get("function")
-        if fn and str(fn).strip():
-            last_fn = str(fn).strip()
-        elif last_fn:
-            rec["function"] = last_fn
+            # Normalise SOD fields to int / None before Pydantic validation
+            for rec in data.get("records", []):
+                for field in ("severity", "occurrence", "detection"):
+                    val = rec.get(field)
+                    if val is not None:
+                        try:
+                            rec[field] = int(val)
+                        except (ValueError, TypeError):
+                            rec[field] = None
 
-    return FMEAFullExtraction(**data)
+            # Pre-processing: normalise alias keys to canonical names in every record
+            # (e.g. "item_function" → "function") so propagation and lookup work correctly
+            _CANON_ALIASES: dict[str, list[str]] = {
+                "function":     ["item_function", "item function", "fonction", "item",
+                                 "component_function"],
+                "failure_mode": ["failure mode", "potential_failure_mode",
+                                 "mode_de_defaillance", "defaillance", "falha", "modo_de_falha"],
+                "effect":       ["potential_effect", "effet", "efeito"],
+                "cause":        ["potential_cause", "root_cause", "causa"],
+            }
+            for rec in data.get("records", []):
+                for canonical, aliases in _CANON_ALIASES.items():
+                    if canonical not in rec or rec[canonical] is None:
+                        for alias in aliases:
+                            if alias in rec and rec[alias] is not None:
+                                rec[canonical] = rec.pop(alias)
+                                break
+
+            # Post-processing: propagate "function" down to rows where it is blank
+            # (handles merged-cell PDFs where only the first row of a group has the value)
+            last_fn: Optional[str] = None
+            for rec in data.get("records", []):
+                fn = rec.get("function")
+                if fn and str(fn).strip():
+                    last_fn = str(fn).strip()
+                elif last_fn:
+                    rec["function"] = last_fn
+
+            return FMEAFullExtraction(**data)
+        except Exception as exc:
+            last_error = exc
+
+    assert last_error is not None
+    raise last_error
 
 
 # ============================================================================

@@ -9,7 +9,7 @@ export default defineConfig({
     // Proxy API calls to FastAPI — avoids CORS issues in development
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ''),
       },

@@ -1,12 +1,9 @@
 import { useState, useEffect, useRef, Fragment } from 'react'
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8001'
+const API = import.meta.env.VITE_API_URL || '/api'
 
 const MODELS = [
-  { value: 'RedHatAI/Qwen3.6-35B-A3B-NVFP4',                       label: 'Qwen3.6 · 35B A3B ★ (recommended)', recommended: true },
-  { value: 'qwen36---35b-a3b--bias-important---exprimental',        label: 'Qwen3.6 · 35B A3B (experimental)' },
-  { value: 'qwen3527b-no-think',                                    label: 'Qwen3.5 · 27B (legacy)' },
-  { value: 'mistral-small3.2:latest',                               label: 'Mistral Small 3.2 · 24B' },
+  { value: 'mistral-small3.2:latest',                               label: 'Mistral Small 3.2 · 24B (recommended)', recommended: true },
   { value: 'hf.co/unsloth/Magistral-Small-2509-GGUF:UD-Q4_K_XL',   label: 'Magistral Small 1.2 · 23.6B' },
   { value: 'glm-4.7-flash:latest',                                  label: 'GLM 4.7 Flash · 29.9B' },
   { value: 'nvidia/Gemma-4-31B-IT-NVFP4',                          label: 'Gemma 4 · 31B (new server test)' },
@@ -14,7 +11,10 @@ const MODELS = [
   { value: 'hf.co/unsloth/Olmo-3.1-32B-Instruct-GGUF:Q4_K_M',     label: 'Olmo 3.1 · 32B (experimental, open data)' },
   { value: 'hf.co/unsloth/Olmo-3.1-32B-Think-GGUF:Q4_K_M',        label: 'Olmo 3.1 Think · 32B (experimental, open data)' },
   { value: 'devstral-small-2:latest',                               label: 'Devstral Small 2 · 24B (coding-focused)' },
-  { value: 'ministral-3:3b',                                        label: 'Ministral 3 · 3.8B ⚠ too small for FMEA extraction', weak: true },
+  { value: 'RedHatAI/Qwen3.6-35B-A3B-NVFP4',                       label: 'Qwen3.6 · 35B A3B (legacy, unavailable)', unavailable: true },
+  { value: 'qwen36---35b-a3b--bias-important---exprimental',        label: 'Qwen3.6 · 35B A3B (experimental)' },
+  { value: 'qwen3527b-no-think',                                    label: 'Qwen3.5 · 27B (legacy)' },
+  { value: 'ministral-3:3b',                                        label: 'Ministral 3 · 3.8B (too small for FMEA extraction)', weak: true },
 ]
 
 function rpnCls(v) {
@@ -46,6 +46,17 @@ function fmtDate(iso) {
   return date.toLocaleString()
 }
 
+async function readErrorMessage(res) {
+  const text = await res.text()
+  if (!text) return `Server error ${res.status}`
+  try {
+    const data = JSON.parse(text)
+    return data.detail || data.message || text || `Server error ${res.status}`
+  } catch {
+    return text || `Server error ${res.status}`
+  }
+}
+
 // ── Header ───────────────────────────────────────────────────────────────────
 function Header({ model, setModel, dark, toggleDark, onMyFmeas }) {
   const weakModel = MODELS.find(m => m.value === model)?.weak
@@ -71,11 +82,11 @@ function Header({ model, setModel, dark, toggleDark, onMyFmeas }) {
               weakModel ? 'border-amber-400 ring-1 ring-amber-400' : 'border-slate-200 dark:border-slate-600'
             } bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer`}
           >
-            {MODELS.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+            {MODELS.map(m => <option key={m.value} value={m.value} disabled={m.unavailable}>{m.label}</option>)}
           </select>
           {weakModel && (
             <span className="text-xs text-amber-600 font-medium">
-              ⚠ This model (3.8B) is too small for extraction — use Qwen3.5 27b
+              This model (3.8B) is too small for extraction; use Mistral Small 3.2.
             </span>
           )}
         </div>
@@ -138,13 +149,14 @@ function UploadSection({ open, onToggle, model, onExtracted }) {
     try {
       const form = new FormData()
       form.append('file', file)
+      const baseHeaders = { 'X-Model-Name': model }
       if (isPDF) {
-        const headers = { 'X-Model-Name': model }
+        const headers = { ...baseHeaders }
         if (pageRange.trim()) headers['X-Page-Range'] = pageRange.trim()
         const res = await fetch(`${API}/extract/stream`, {
           method: 'POST', headers, body: form, signal: ctrl.signal,
         })
-        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`) }
+        if (!res.ok) throw new Error(await readErrorMessage(res))
         const reader  = res.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
@@ -165,9 +177,9 @@ function UploadSection({ open, onToggle, model, onExtracted }) {
         }
       } else {
         const res = await fetch(`${API}/extract`, {
-          method: 'POST', headers: { 'X-Model-Name': model }, body: form, signal: ctrl.signal,
+          method: 'POST', headers: baseHeaders, body: form, signal: ctrl.signal,
         })
-        if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`) }
+        if (!res.ok) throw new Error(await readErrorMessage(res))
         const data = await res.json()
         onExtracted(data.document, file)
       }
@@ -473,7 +485,7 @@ function SuggestMissingPanel({ doc, model, onAddFailure }) {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ part_name: doc.part_name, functions, model_name: model }),
       })
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`) }
+      if (!res.ok) throw new Error(await readErrorMessage(res))
       setResult(await res.json()); setStatus('done')
     } catch(e) { setError(e.message); setStatus('error') }
   }
@@ -1130,7 +1142,7 @@ function MyFmeasModal({ sessions, onClose, onLoadRecords, onDeleteSession }) {
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App() {
   const [dark,  setDark]  = useState(false)
-  const [model, setModel] = useState('RedHatAI/Qwen3.6-35B-A3B-NVFP4')
+  const [model, setModel] = useState('mistral-small3.2:latest')
   const [doc,   setDoc]   = useState(null)
   const [sessionId, setSessionId] = useState(null)
   const [myFmeasOpen, setMyFmeasOpen] = useState(false)
@@ -1218,7 +1230,7 @@ export default function App() {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ field, function: r.function || r.component || '', failure_mode: r.failure_mode || '', context: `Part: ${doc.part_name}. Component: ${r.component || ''}`, model_name: model }),
       })
-      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.detail || `Server error ${res.status}`) }
+      if (!res.ok) throw new Error(await readErrorMessage(res))
       const data = await res.json()
       setModal(m => ({ ...m, loading: false, data }))
     } catch(e) { setModal(m => ({ ...m, loading: false, error: e.message })) }

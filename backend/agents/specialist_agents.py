@@ -20,7 +20,18 @@ import os
 import re
 from typing import Any, Optional
 
+import httpx
 from openai import AsyncOpenAI
+
+try:
+    from ragas.llms import llm_factory
+    from ragas.metrics.collections import Faithfulness, ResponseGroundedness
+    _RAGAS_IMPORT_ERROR: Exception | None = None
+except Exception as exc:
+    llm_factory = None
+    Faithfulness = None
+    ResponseGroundedness = None
+    _RAGAS_IMPORT_ERROR = exc
 
 from backend.schemas import AgentRequest, AgentResponse, ReferenceItem
 from backend.services.book_indexer import list_standard_documents, retrieve_book_context_with_metadata
@@ -248,6 +259,86 @@ _FIELD_STANDARD_PRIORITY = {
 
 BOOKS_PATH = "Books/"
 
+_DEFAULT_AGENT_MODEL_FALLBACKS = (
+    "mistral-small3.2:latest",
+    "glm-4.7-flash:latest",
+    "gemma4:31b",
+)
+
+
+def _candidate_models(preferred_model: str | None) -> list[str]:
+    models: list[str] = []
+    for model in [preferred_model, os.getenv("LLM_DEFAULT_MODEL"), *_DEFAULT_AGENT_MODEL_FALLBACKS]:
+        if model and model not in models:
+            models.append(model)
+    return models
+
+
+async def _chat_content(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    messages: list[dict[str, str]],
+    temperature: float,
+    max_tokens: int,
+) -> str:
+    timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", "120"))
+
+    async def _call_openai_compatible() -> str:
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=timeout, max_retries=1)
+        response = await client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        message = response.choices[0].message
+        content = message.content
+        if content is None:
+            refusal = getattr(message, "refusal", None)
+            raise ValueError("LLM returned no text content" + (f": {refusal}" if refusal else ""))
+        return content
+
+    async def _call_utc_ollama() -> str:
+        origin = base_url.split("/api/", 1)[0].rstrip("/")
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                f"{origin}/ollama/api/chat",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "stream": False,
+                    "options": {
+                        "temperature": temperature,
+                        "num_predict": max_tokens,
+                    },
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+        content = (payload.get("message") or {}).get("content")
+        if content is None:
+            raise ValueError("UTC Ollama endpoint returned no text content")
+        return content
+
+    try:
+        return await _call_openai_compatible()
+    except Exception as exc:
+        if "ia.beta.utc.fr" not in base_url:
+            raise
+        try:
+            return await _call_utc_ollama()
+        except Exception as ollama_exc:
+            raise RuntimeError(
+                f"OpenAI-compatible call failed for model '{model}': {exc}; "
+                f"UTC Ollama fallback failed: {ollama_exc}"
+            ) from ollama_exc
+
 
 # ============================================================================
 # ROUTING
@@ -363,8 +454,9 @@ async def _judge_response(
     }
 
     try:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        response = await client.chat.completions.create(
+        raw = await _chat_content(
+            api_key=api_key,
+            base_url=base_url,
             model=model,
             messages=[
                 {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
@@ -373,7 +465,7 @@ async def _judge_response(
             temperature=0,
             max_tokens=400,
         )
-        raw = response.choices[0].message.content.strip()
+        raw = raw.strip()
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
@@ -409,11 +501,12 @@ async def _route_by_llm(
     Falls back gracefully on any network or parse error.
     """
     base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-    model    = os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    model    = os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
 
     try:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        response = await client.chat.completions.create(
+        raw = await _chat_content(
+            api_key=api_key,
+            base_url=base_url,
             model=model,
             messages=[
                 {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
@@ -422,7 +515,7 @@ async def _route_by_llm(
             temperature=0,
             max_tokens=20,
         )
-        raw = response.choices[0].message.content.strip()
+        raw = raw.strip()
         # Strip any <think>...</think> blocks from reasoning models
         raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
         # Validate — only accept names that actually exist
@@ -528,56 +621,62 @@ async def _call_specialist_agent(
     val: Optional[str | int] = None
     justification = "Agent call failed — check API key and connection."
 
-    try:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user",   "content": user_prompt},
-            ],
-            temperature=0.1,
-            max_tokens=512,
-        )
-        raw = response.choices[0].message.content.strip()
-
-        # Strip <think>...</think> blocks (reasoning models)
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-
-        # Strip markdown code fences
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+    last_error: Exception | None = None
+    for candidate_model in _candidate_models(model):
+        try:
+            raw = await _chat_content(
+                api_key=api_key,
+                base_url=base_url,
+                model=candidate_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt},
+                ],
+                temperature=0.1,
+                max_tokens=512,
+            )
             raw = raw.strip()
-        if raw.endswith("```"):
-            raw = raw[: raw.rfind("```")].strip()
 
-        # Regex fallback: extract first {...} block in case the model added preamble text
-        if not raw.startswith("{"):
-            m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-            if m:
-                raw = m.group(0)
+            # Strip <think>...</think> blocks (reasoning models)
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
 
-        data = json.loads(raw)
-        val  = data.get("suggested_value")
+            # Strip markdown code fences
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
+            if raw.endswith("```"):
+                raw = raw[: raw.rfind("```")].strip()
 
-        if is_numeric and val is not None:
-            try:
-                val = int(val)
-            except (ValueError, TypeError):
-                val = None
+            # Regex fallback: extract first {...} block in case the model added preamble text
+            if not raw.startswith("{"):
+                m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+                if m:
+                    raw = m.group(0)
 
-        justification = data.get("justification", "No justification returned.")
+            data = json.loads(raw)
+            val  = data.get("suggested_value")
 
-    except Exception as exc:
-        val           = None if is_numeric else "Unable to generate suggestion"
-        justification = (
-            f"Model '{model}' failed to return valid structured JSON. "
-            f"Small models (< 7B) often cannot follow strict JSON output instructions — "
-            f"switch to Qwen3.5 27b for reliable results. "
-            f"Error: {exc}"
-        )
+            if is_numeric and val is not None:
+                try:
+                    val = int(val)
+                except (ValueError, TypeError):
+                    val = None
+
+            justification = data.get("justification", "No justification returned.")
+            return val, justification
+
+        except Exception as exc:
+            last_error = exc
+            continue
+
+    val           = None if is_numeric else "Unable to generate suggestion"
+    justification = (
+        f"No available model returned a valid structured suggestion. "
+        f"Tried: {', '.join(_candidate_models(model))}. "
+        f"Error: {last_error}"
+    )
 
     return val, justification
 
@@ -683,6 +782,49 @@ def _retrieve_stage2_context(request: AgentRequest, agent_name: str) -> dict[str
     }
 
 
+def _build_ragas_payload(
+    request: AgentRequest,
+    suggested_value: Optional[str | int],
+    justification: str,
+    retrieval_bundle: dict[str, Any],
+) -> dict[str, Any] | None:
+    retrieved_contexts = [
+        item.get("text", "")
+        for item in [
+            *retrieval_bundle.get("specialist_evidence", []),
+            *retrieval_bundle.get("standards_evidence", []),
+        ]
+        if item.get("text")
+    ]
+    if not retrieved_contexts:
+        return None
+
+    rules = retrieval_bundle.get("field_rules", [])
+    rules_text = "\n".join(f"- {rule}" for rule in rules)
+    user_input = retrieval_bundle.get("query") or (
+        f"Function: {request.function}\n"
+        f"Failure mode: {request.failure_mode}\n"
+        f"Field: {request.field}"
+    )
+    if rules_text:
+        user_input = f"{user_input}\nApplicable field rules:\n{rules_text}"
+
+    answer = f"Suggested value: {suggested_value}\nJustification: {justification}"
+    return {
+        "user_input": user_input,
+        "retrieved_contexts": retrieved_contexts,
+        "response": answer,
+    }
+
+
+def _ragas_verdict(score: float) -> str:
+    if score >= 0.8:
+        return "pass"
+    if score >= 0.6:
+        return "review"
+    return "fail"
+
+
 async def _evaluate_faithfulness(
     *,
     request: AgentRequest,
@@ -693,68 +835,44 @@ async def _evaluate_faithfulness(
     model: str,
     base_url: str,
 ) -> dict[str, Any]:
-    evidence_text = "\n".join(
-        f"- {item['book_file']} p.{item.get('page_num', '?')}: {item['text']}"
-        for item in [
-            *retrieval_bundle.get("specialist_evidence", []),
-            *retrieval_bundle.get("standards_evidence", []),
-        ]
-    ) or "- No evidence retrieved"
-    field_rules = retrieval_bundle.get("field_rules", [])
-    rules_text = "\n".join(f"- {rule}" for rule in field_rules) or "- No explicit field rules extracted"
-
-    system_prompt = (
-        "You are evaluating whether an FMEA answer is faithful to the retrieved evidence.\n\n"
-        "Return JSON with exactly three keys:\n"
-        '  "score": float 0.0 to 1.0\n'
-        '  "verdict": "pass" | "review" | "fail"\n'
-        '  "notes": ["concise evidence-grounded observations"]\n\n'
-        "Use 'pass' for evidence-grounded answers, 'review' for partially supported answers, and 'fail' for unsupported or contradictory answers.\n"
-        "Return ONLY raw JSON."
-    )
-    user_prompt = (
-        f"Function: {request.function}\n"
-        f"Failure mode: {request.failure_mode}\n"
-        f"Field: {request.field}\n"
-        f"Suggested value: {suggested_value}\n"
-        f"Justification: {justification}\n\n"
-        f"Retrieved evidence:\n{evidence_text}\n\n"
-        f"Field rules:\n{rules_text}"
-    )
-
     fallback = {"score": 0.5, "verdict": "review", "notes": ["Faithfulness evaluation unavailable"]}
+    if _RAGAS_IMPORT_ERROR is not None or llm_factory is None:
+        fallback["notes"] = [f"RAGAS disabled at startup: {_RAGAS_IMPORT_ERROR}"]
+        return fallback
+
+    payload = _build_ragas_payload(request, suggested_value, justification, retrieval_bundle)
+    if payload is None:
+        return {
+            "score": 0.5,
+            "verdict": "review",
+            "notes": ["RAGAS skipped because no retrieval evidence was available"],
+        }
+
     try:
-        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            max_tokens=250,
+        ragas_llm = llm_factory(
+            model,
+            client=AsyncOpenAI(api_key=api_key, base_url=base_url),
         )
-        raw = response.choices[0].message.content.strip()
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-        if raw.endswith("```"):
-            raw = raw[: raw.rfind("```")].strip()
-        if not raw.startswith("{"):
-            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-            if match:
-                raw = match.group(0)
-        parsed = json.loads(raw)
-        score = float(parsed.get("score", 0.5))
-        verdict = parsed.get("verdict", "review")
-        if verdict not in {"pass", "review", "fail"}:
-            verdict = "review"
-        notes = parsed.get("notes", []) or []
-        return {"score": max(0.0, min(1.0, score)), "verdict": verdict, "notes": notes}
-    except Exception:
+        faithfulness_metric = Faithfulness(llm=ragas_llm)
+        groundedness_metric = ResponseGroundedness(llm=ragas_llm)
+        faithfulness_score = float(await faithfulness_metric.ascore(**payload))
+        groundedness_score = float(
+            await groundedness_metric.ascore(
+                response=payload["response"],
+                retrieved_contexts=payload["retrieved_contexts"],
+            )
+        )
+        combined_score = max(0.0, min(1.0, (faithfulness_score + groundedness_score) / 2.0))
+        verdict = _ragas_verdict(combined_score)
+        notes = [
+            f"RAGAS faithfulness={faithfulness_score:.3f}",
+            f"RAGAS response_groundedness={groundedness_score:.3f}",
+        ]
+        if retrieval_bundle.get("field_rules"):
+            notes.append(f"Evaluated with {len(retrieval_bundle['field_rules'])} extracted field rule(s)")
+        return {"score": combined_score, "verdict": verdict, "notes": notes}
+    except Exception as exc:
+        fallback["notes"] = [f"RAGAS evaluation unavailable: {exc}"]
         return fallback
 
 
@@ -792,7 +910,7 @@ async def route_and_call(request: AgentRequest, api_key: str) -> AgentResponse:
     field_label = _FIELD_LABEL.get(request.field, request.field.replace("_", " ").title())
 
     base_url = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-    model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    model    = request.model_name or os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
 
     working_request = request
     retry_count = 0

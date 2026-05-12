@@ -268,6 +268,7 @@ async def extract_document_stream(
                 _normalise_records,
                 full_extraction_to_fmea_document,
                 FMEAFullExtraction,
+                extract_fmea_from_pdf_bytes,
             )
             from backend.services.extractor import _fmea_document_to_schema
             loop = asyncio.get_event_loop()
@@ -335,6 +336,24 @@ async def extract_document_stream(
                     })
                 except Exception as exc:
                     yield await _sse({"type": "page_error", "page": page_num, "message": str(exc)})
+
+            if not all_records:
+                yield await _sse({
+                    "type": "status",
+                    "message": "No records found page-by-page; retrying with full-document extraction...",
+                })
+                fmea_doc = await loop.run_in_executor(
+                    None,
+                    lambda: extract_fmea_from_pdf_bytes(
+                        file_bytes=file_bytes,
+                        source_filename=filename,
+                        api_key=api_key,
+                        model_name=model_name,
+                    ),
+                )
+                document = _fmea_document_to_schema(fmea_doc)
+                yield await _sse({"type": "done", "document": document.model_dump(), "columns": []})
+                return
 
             extraction = FMEAFullExtraction(
                 part_name = part_name,
@@ -593,7 +612,7 @@ async def suggest_missing_failures(
     )
 
     base_url   = os.getenv("LLM_BASE_URL", "https://ia.beta.utc.fr/api/v1")
-    model_name = body.model_name or os.getenv("LLM_DEFAULT_MODEL", "RedHatAI/Qwen3.6-35B-A3B-NVFP4")
+    model_name = body.model_name or os.getenv("LLM_DEFAULT_MODEL", "mistral-small3.2:latest")
 
     def _repair_truncated_json(raw: str) -> str:
         """
