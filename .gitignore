@@ -58,6 +58,8 @@ env/
 # ============================================================================
 data/uploads/
 data/vector_store/
+data/vector_store_test/
+data/vector_store_backup_*/
 *.db
 *.sqlite
 *.sqlite3

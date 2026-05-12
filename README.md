@@ -15,7 +15,8 @@ This repository contains an AI-assisted FMEA platform with:
 - a React frontend for document upload, review, AI suggestions, and session recovery
 - PostgreSQL for relational persistence
 - MinIO for uploaded files and generated artifacts
-- ChromaDB for book-based retrieval infrastructure
+- local vector indexes for Books and Standards retrieval
+- RAGAS and LLM-as-Judge evaluation for AI suggestions
 
 The current persistence model is Alembic-first: database schema changes are applied through migrations, and the application no longer relies on SQLAlchemy `create_all()` during startup.
 
@@ -41,6 +42,7 @@ Available services:
 
 - UI: http://localhost:5174
 - API base: http://localhost:8001
+- Docker-internal API port: `api:8000`
 - Swagger UI: http://localhost:8001/docs
 - ReDoc: http://localhost:8001/redoc
 - MinIO API: http://localhost:9000
@@ -97,11 +99,19 @@ Frontend URLs by mode:
 
 When developing the frontend locally, it is usually better to stop the Docker `web` container and keep the Docker `api` container running.
 
+The local Vite frontend proxies `/api` requests to `http://127.0.0.1:8001`. The Docker web container serves the production build on port `5174` and proxies `/api` internally to `http://api:8000`.
+
 ---
 
 ## Updating Dependencies
 
 Use Poetry as the source of truth for Python dependencies.
+
+`pyproject.toml` declares the dependency ranges required by the project, while
+`poetry.lock` records the exact versions selected by Poetry after dependency
+resolution. This keeps local development, Docker builds, and future clones of
+the repository reproducible. When dependencies change, commit `poetry.lock`
+together with `pyproject.toml`.
 
 ```bash
 poetry add <package>
@@ -135,8 +145,9 @@ Always commit `poetry.lock` together with dependency changes.
 
 ### Book Indexing
 
-- `GET /index/books` — inspect indexed reference-book status
-- `POST /index/books` — index or re-index all books under `Books/`
+- `GET /index/books` — inspect indexed Books and Standards status
+- `POST /index/books` — index or re-index all PDFs under `Books/` and `Standards/`
+- `GET /index/books/diagnostics` — inspect extraction diagnostics for a specific reference PDF
 
 ### Sessions and Persistence
 
@@ -164,7 +175,10 @@ Interactive API documentation is available in Swagger UI at http://localhost:800
 - Alembic for schema migrations
 - Pydantic v2 schemas
 - MinIO-backed file persistence
-- ChromaDB-backed reference retrieval infrastructure
+- Local vector indexes for Books and Standards retrieval
+- UTC LLM integration through `https://ia.beta.utc.fr`
+- RAGAS faithfulness and response-groundedness evaluation
+- LLM-as-Judge validation after specialist-agent generation
 - Docker backend image optimized for CPU-only Torch usage
 
 ---
@@ -175,7 +189,8 @@ The platform currently uses:
 
 - PostgreSQL 16 for relational persistence
 - MinIO for original uploads and future generated artifacts
-- ChromaDB for semantic retrieval over reference books
+- Local vector indexes under `data/vector_store/books/` and `data/vector_store/standards/` for active specialist-agent retrieval
+- ChromaDB files may still exist under `data/vector_store/`, but the current specialist RAG path uses the local `rows.json` and `embeddings.npy` indexes
 
 ### Main persisted entities
 
@@ -228,7 +243,7 @@ FMEA_AI/
 ├── src/                           # Analytics, NLP, preprocessing, vector store, visualization
 ├── Books/                         # Reference books used for retrieval
 ├── Standards/                     # Standards documents used as normative references
-├── data/                          # Sample data and Chroma persistence
+├── data/                          # Sample data and local vector indexes
 ├── tests/                         # Test suite
 ├── translations/                  # i18n resources (en, fr, pt-br)
 ├── docker-compose.yml             # Full local stack
@@ -246,8 +261,9 @@ FMEA_AI/
 - Original file persistence in MinIO
 - Editable document snapshots with explicit save flow
 - Specialist-agent suggestions for FMEA fields
-- Judge and human-review persistence in `ai_suggestions`
-- Book indexing infrastructure for future Stage 2 retrieval workflows
+- Books and Standards retrieval for specialist-agent context
+- RAGAS evaluation for faithfulness and response groundedness
+- LLM-as-Judge and human-review persistence in `ai_suggestions`
 - Multilingual support in English, French, and Brazilian Portuguese
 
 ---
@@ -262,7 +278,7 @@ FastAPI backend
     |
     +-- PostgreSQL 16   (sessions, records, suggestions, feedback, telemetry)
     +-- MinIO           (uploaded files and future generated artifacts)
-    +-- ChromaDB        (reference-book retrieval store)
+    +-- Local indexes   (Books and Standards retrieval store)
     +-- NLP/analytics   (extraction, risk analysis, supporting utilities)
 ```
 
@@ -288,6 +304,7 @@ FastAPI backend
 - PostgreSQL 16
 - MinIO
 - ChromaDB
+- RAGAS
 - PyMuPDF
 - Pandas
 - openpyxl
@@ -302,7 +319,21 @@ FastAPI backend
 
 ## Current Direction
 
-The repository already supports persistence for sessions, uploaded files, extracted records, and edited document snapshots. Retrieval infrastructure for `Books/` is present, while richer multi-source retrieval and faithfulness validation are planned next steps.
+The repository currently supports persistence for sessions, uploaded files, extracted records, edited document snapshots, and reviewed AI suggestions. Specialist-agent suggestions use RAG over local Books and Standards indexes, then evaluate generated suggestions with RAGAS and LLM-as-Judge before returning them to the frontend.
+
+The AI Suggestion flow is:
+
+```text
+Frontend AI Suggestion or Swagger POST /analyze
+    -> router LLM selects a specialist agent
+    -> RAG retrieves Books and Standards context
+    -> specialist LLM generates the suggestion
+    -> RAGAS evaluates faithfulness and response groundedness
+    -> LLM-as-Judge evaluates correctness
+    -> response is returned to the UI
+```
+
+`POST /analyze` computes the suggestion and evaluation values but does not persist them by itself. Suggestions and RAGAS metadata are persisted when the engineer accepts or rejects the suggestion through `POST /sessions/{session_id}/suggestions`. The edited FMEA table is persisted separately through `PUT /sessions/{session_id}/document`, which is the Save Session flow in the frontend.
 
 ---
 
